@@ -1,0 +1,4 @@
+flask
+playwright==1.40.0
+apscheduler
+requests
