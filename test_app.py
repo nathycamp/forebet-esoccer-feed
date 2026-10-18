@@ -55,6 +55,8 @@ class ReaderServiceTests(unittest.TestCase):
             "pred": "1",
             "score": "4 - 3",
             "avg_goals": "6.11",
+            "status": "upcoming",
+            "actual_score": "",
         }, {
             "home": "Incomplete row",
             "away": "Juventus (DEKSON)",
@@ -63,6 +65,8 @@ class ReaderServiceTests(unittest.TestCase):
             "pred": "1",
             "score": "4 - 3",
             "avg_goals": "6.11",
+            "status": "upcoming",
+            "actual_score": "",
         }]
         with self.assertLogs(reader.logger, level="WARNING"):
             fixtures = reader.extract_fixtures(page, "esb8")
@@ -73,9 +77,22 @@ class ReaderServiceTests(unittest.TestCase):
             "kickoff_utc": "2026-10-18T16:55:00+00:00",
             "p1": 46, "px": 23, "p2": 31, "pred": "1",
             "correct_score": "4-3", "avg_goals": 6.11,
+            "status": "upcoming", "actual_score": None,
         })
         self.assertEqual(reader.parse_kickoff("10/18/2026 4:55 PM").isoformat(),
                          "2026-10-18T16:55:00+00:00")
+
+    def test_parses_finished_fixture_with_actual_score(self):
+        fixture = reader.parse_fixture({
+            "home": "England (kkikus)", "away": "Argentina (noeN)",
+            "date": "17/10/2026 20:07",
+            "probabilities": ["20", "18", "62"],
+            "pred": "2", "score": "2 - 3", "avg_goals": "6.02",
+            "status": "played", "actual_score": "2 - 4",
+        })
+        self.assertEqual(fixture["status"], "played")
+        self.assertEqual(fixture["actual_score"], "2-4")
+        self.assertEqual(fixture["correct_score"], "2-3")
 
     def test_cloudflare_click_and_wait(self):
         page = MagicMock()

@@ -16,18 +16,21 @@ LEAGUES = {
     "gt12": "https://www.forebet.com/en/esoccer/esoccer-liga-pro-12-mins-play",
 }
 FIXTURE_FIELDS = """() => Array.from(document.querySelectorAll('.rcnt'))
-    .filter(row => row.querySelector(':scope > .predict'))
+    .filter(row => row.querySelector(':scope > .predict, :scope > .predict_y, :scope > .predict_no'))
     .map(row => {
         const field = selector => row.querySelector(selector)?.innerText.trim() || '';
+        const finished = field(':scope > .lmin_td').includes('FT');
         return {
             home: field('.homeTeam'),
             away: field('.awayTeam'),
             date: field('.date_bah'),
             probabilities: Array.from(row.querySelectorAll(':scope > .fprc > span'),
                 span => span.innerText.trim()),
-            pred: field('.predict .forepr'),
-            score: field(':scope > .ex_sc.tabonly') || field('.predict .scrmobpred'),
+            pred: field(':scope > .predict .forepr, :scope > .predict_y .forepr, :scope > .predict_no .forepr'),
+            score: field(':scope > .ex_sc.tabonly'),
             avg_goals: field(':scope > .avg_sc.tabonly'),
+            status: finished ? 'played' : 'upcoming',
+            actual_score: finished ? field(':scope > .lscr_td .l_scr') : '',
         };
     })"""
 
@@ -62,6 +65,15 @@ def parse_fixture(fields):
     score = re.fullmatch(r"(\d+)\s*-\s*(\d+)", fields["score"])
     if not score:
         raise ValueError("invalid predicted score")
+    status = fields["status"]
+    if status not in {"played", "upcoming"}:
+        raise ValueError("invalid fixture status")
+    actual_score = None
+    if status == "played":
+        result = re.fullmatch(r"(\d+)\s*-\s*(\d+)", fields["actual_score"])
+        if not result:
+            raise ValueError("invalid final score")
+        actual_score = f"{result.group(1)}-{result.group(2)}"
     avg_goals = float(fields["avg_goals"])
     if avg_goals < 0:
         raise ValueError("invalid average goals")
@@ -77,6 +89,8 @@ def parse_fixture(fields):
         "pred": pred,
         "correct_score": f"{score.group(1)}-{score.group(2)}",
         "avg_goals": avg_goals,
+        "status": status,
+        "actual_score": actual_score,
     }
 
 
