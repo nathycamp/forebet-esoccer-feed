@@ -63,6 +63,20 @@ class ReaderServiceTests(unittest.TestCase):
         click.assert_called_once_with(page)
         self.assertEqual([call.args[0] for call in page.wait_for_timeout.call_args_list], [3000, 5000])
 
+    def test_invisible_iframe_is_not_clicked(self):
+        page = MagicMock()
+        frame = MagicMock()
+        frame.url = "https://challenges.cloudflare.com/widget"
+        frame.locator.return_value.count.return_value = 0
+        frame.frame_element.return_value.bounding_box.return_value = {
+            "x": 192, "y": 304, "width": 0, "height": 0,
+        }
+        page.frames = [frame]
+        page.locator.return_value.count.return_value = 0
+        page.get_by_text.return_value.count.return_value = 0
+        self.assertFalse(reader.click_cloudflare(page))
+        page.mouse.click.assert_not_called()
+
 
 if __name__ == "__main__":
     unittest.main()

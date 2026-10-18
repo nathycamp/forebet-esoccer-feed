@@ -43,7 +43,7 @@ def click_cloudflare(page):
             logger.warning("Iframe checkbox click failed: %s", exc)
         try:
             box = frame.frame_element().bounding_box()
-            if box:
+            if box and box["width"] > 0 and box["height"] > 0:
                 page.mouse.click(box["x"] + box["width"] / 2, box["y"] + box["height"] / 2)
                 logger.info("Clicked Cloudflare iframe")
                 return True
@@ -69,7 +69,8 @@ def clear_cloudflare(page):
             return True
         logger.warning("Cloudflare challenge detected, attempt %d", attempt + 1)
         page.wait_for_timeout(3000)
-        click_cloudflare(page)
+        if not click_cloudflare(page):
+            logger.warning("No visible Cloudflare checkbox was available to click")
         page.wait_for_timeout(5000)
         if not is_challenged(page):
             return True
