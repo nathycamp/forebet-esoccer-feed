@@ -1,4 +1,4 @@
-"""Railway HTTP service for the Forebet Observatory-style reader."""
+"""Railway HTTP service for Forebet esoccer predictions."""
 
 import logging
 import os
@@ -20,7 +20,7 @@ cache = {
     "last_status": "error",
     "fetched_at": None,
     "stale": True,
-    "pages": {},
+    "leagues": {},
 }
 
 
@@ -35,7 +35,7 @@ def refresh_pages():
         successful = {key: page for key, page in results.items() if page.get("status") == "ok"}
         complete = len(successful) == len(LEAGUES)
         with cache_lock:
-            cache["pages"].update(successful)
+            cache["leagues"].update(successful)
             cache["last_fetch"] = attempted_at
             if successful:
                 cache["fetched_at"] = attempted_at
@@ -63,23 +63,15 @@ def health():
 @app.get("/predictions")
 def predictions():
     with cache_lock:
-        pages = {}
+        leagues = {}
         for key in LEAGUES:
-            saved = cache["pages"].get(key)
-            if saved:
-                text = saved["text"]
-                pages[key] = {
-                    "status": "ok",
-                    "text_length": len(text),
-                    "text": text,
-                }
-            else:
-                pages[key] = {"status": "error", "text_length": 0, "text": ""}
+            saved = cache["leagues"].get(key)
+            leagues[key] = saved["fixtures"] if saved else {"status": "error"}
         return jsonify({
             "fetched_at": cache["fetched_at"],
             "source": "railway-shifter-reader",
             "stale": cache["stale"],
-            "pages": pages,
+            "leagues": leagues,
         })
 
 

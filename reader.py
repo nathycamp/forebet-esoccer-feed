@@ -2,6 +2,7 @@
 
 import logging
 import os
+import re
 from datetime import datetime, timezone
 
 from patchright.sync_api import sync_playwright
@@ -14,6 +15,90 @@ LEAGUES = {
     "h2hgg": "https://www.forebet.com/en/esoccer/esoccer-h2h-gg-league-8-mins-play",
     "gt12": "https://www.forebet.com/en/esoccer/esoccer-liga-pro-12-mins-play",
 }
+FIXTURE_FIELDS = """() => Array.from(document.querySelectorAll('.rcnt'))
+    .filter(row => row.querySelector(':scope > .predict'))
+    .map(row => {
+        const field = selector => row.querySelector(selector)?.innerText.trim() || '';
+        return {
+            home: field('.homeTeam'),
+            away: field('.awayTeam'),
+            date: field('.date_bah'),
+            probabilities: Array.from(row.querySelectorAll(':scope > .fprc > span'),
+                span => span.innerText.trim()),
+            pred: field('.predict .forepr'),
+            score: field(':scope > .ex_sc.tabonly') || field('.predict .scrmobpred'),
+            avg_goals: field(':scope > .avg_sc.tabonly'),
+        };
+    })"""
+
+
+def parse_team(value):
+    match = re.fullmatch(r"(.+?)\s*\(([^()]*)\)\s*", value)
+    if not match or not match.group(1).strip() or not match.group(2).strip():
+        raise ValueError("team or player tag missing")
+    return match.group(1).strip(), match.group(2).strip()
+
+
+def parse_kickoff(value):
+    value = " ".join(value.split())
+    for date_format in ("%d/%m/%Y %H:%M", "%m/%d/%Y %I:%M %p"):
+        try:
+            return datetime.strptime(value, date_format).replace(tzinfo=timezone.utc)
+        except ValueError:
+            continue
+    raise ValueError("invalid kickoff date")
+
+
+def parse_fixture(fields):
+    home_club, home_tag = parse_team(fields["home"])
+    away_club, away_tag = parse_team(fields["away"])
+    kickoff = parse_kickoff(fields["date"])
+    probabilities = [int(value.strip().rstrip("%")) for value in fields["probabilities"]]
+    if len(probabilities) != 3 or any(value < 0 or value > 100 for value in probabilities):
+        raise ValueError("invalid 1X2 probabilities")
+    pred = fields["pred"].upper()
+    if pred not in {"1", "X", "2"}:
+        raise ValueError("invalid predicted outcome")
+    score = re.fullmatch(r"(\d+)\s*-\s*(\d+)", fields["score"])
+    if not score:
+        raise ValueError("invalid predicted score")
+    avg_goals = float(fields["avg_goals"])
+    if avg_goals < 0:
+        raise ValueError("invalid average goals")
+    return {
+        "home_tag": home_tag,
+        "away_tag": away_tag,
+        "home_club": home_club,
+        "away_club": away_club,
+        "kickoff_utc": kickoff.isoformat(),
+        "p1": probabilities[0],
+        "px": probabilities[1],
+        "p2": probabilities[2],
+        "pred": pred,
+        "correct_score": f"{score.group(1)}-{score.group(2)}",
+        "avg_goals": avg_goals,
+    }
+
+
+def extract_fixtures(page, league):
+    rows = page.evaluate(FIXTURE_FIELDS)
+    fixtures = []
+    skipped = 0
+    for index, fields in enumerate(rows):
+        try:
+            fixtures.append(parse_fixture(fields))
+        except (KeyError, TypeError, ValueError) as exc:
+            skipped += 1
+            if skipped <= 5:
+                logger.warning("Skipping %s fixture row %d: %s", league, index, exc)
+    if skipped > 5:
+        logger.warning("Skipped %d unparsable %s rows in total", skipped, league)
+    if not fixtures:
+        raise RuntimeError("No valid fixture rows found")
+    logger.info("Parsed %s: %d/%d fixtures", league, len(fixtures), len(rows))
+    return fixtures
+
+
 def is_challenged(page):
     title = page.title().lower()
     try:
@@ -81,13 +166,13 @@ def visit(page, url):
 
 
 def read_pages():
-    """Return each league's raw HTML and rendered text, or an error status."""
+    """Return each league's parsed fixtures, or an error status."""
     proxy = {
         "server": f"http://{os.environ['SHIFTER_HOST']}:{os.environ['SHIFTER_PORT']}",
         "username": os.environ["SHIFTER_USER"],
         "password": os.environ["SHIFTER_PASS"],
     }
-    pages = {}
+    leagues = {}
     profile = os.environ.get("BROWSER_PROFILE_DIR", "/tmp/forebet-chrome-profile")
     os.makedirs(profile, exist_ok=True)
     with sync_playwright() as playwright:
@@ -98,6 +183,8 @@ def read_pages():
             proxy=proxy,
             args=["--no-sandbox", "--disable-dev-shm-usage"],
             viewport={"width": 1280, "height": 800},
+            timezone_id="UTC",
+            locale="en-GB",
         )
         try:
             page = context.pages[0] if context.pages else context.new_page()
@@ -110,15 +197,10 @@ def read_pages():
                 logger.info("Reading %s at %s", key, datetime.now(timezone.utc).isoformat())
                 try:
                     visit(page, url)
-                    html = page.content()
-                    text = page.inner_text("body")
-                    if len(text.strip()) < 100:
-                        raise RuntimeError("Rendered page text is empty or incomplete")
-                    pages[key] = {"html": html, "text": text, "status": "ok"}
-                    logger.info("Read %s: %d text characters", key, len(text))
+                    leagues[key] = {"fixtures": extract_fixtures(page, key), "status": "ok"}
                 except Exception as exc:
-                    pages[key] = {"status": "error", "error": str(exc)}
+                    leagues[key] = {"status": "error", "error": str(exc)}
                     logger.exception("Failed to read %s", key)
         finally:
             context.close()
-    return pages
+    return leagues
