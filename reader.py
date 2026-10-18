@@ -172,11 +172,18 @@ def clear_cloudflare(page):
     return not is_challenged(page)
 
 
-def visit(page, url):
+def visit(page, url, fixture_page=False):
     page.goto(url, wait_until="domcontentloaded", timeout=45000)
     if not clear_cloudflare(page):
         raise RuntimeError("Cloudflare challenge did not clear")
-    page.wait_for_timeout(5000)
+    if fixture_page:
+        page.wait_for_function("""() => Array.from(document.querySelectorAll('.rcnt')).some(
+            row => row.querySelector(':scope > .predict, :scope > .predict_y, :scope > .predict_no')
+                && row.querySelector('.date_bah')?.textContent.trim()
+                && row.querySelectorAll(':scope > .fprc > span').length === 3
+        )""", timeout=12000)
+    else:
+        page.wait_for_timeout(1000)
 
 
 def read_pages():
@@ -208,8 +215,12 @@ def read_pages():
             for key, url in LEAGUES.items():
                 logger.info("Reading %s at %s", key, datetime.now(timezone.utc).isoformat())
                 try:
-                    visit(page, url)
-                    leagues[key] = {"fixtures": extract_fixtures(page, key), "status": "ok"}
+                    visit(page, url, fixture_page=True)
+                    leagues[key] = {
+                        "fixtures": extract_fixtures(page, key),
+                        "status": "ok",
+                        "fetched_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+                    }
                 except Exception as exc:
                     leagues[key] = {"status": "error", "error": str(exc)}
                     logger.exception("Failed to read %s", key)

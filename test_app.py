@@ -1,4 +1,5 @@
 import unittest
+from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock, patch
 
 import app
@@ -30,6 +31,33 @@ class ReaderServiceTests(unittest.TestCase):
             data = client.get("/predictions").get_json()
         self.assertFalse(data["stale"])
         self.assertEqual(data["leagues"]["esb8"][0]["home_tag"], "Mani")
+        self.assertTrue(all(data["league_fetched_at"].values()))
+        self.assertEqual(data["league_fetched_at"], data["league_changed_at"])
+
+    def test_unchanged_fixtures_preserve_change_time(self):
+        fixture = {"home_tag": "Mani"}
+        with patch.object(app, "read_pages", return_value={
+            key: {"fixtures": [fixture], "status": "ok"} for key in app.LEAGUES
+        }):
+            app.refresh_pages()
+            first_changed_at = app.cache["leagues"]["esb8"]["changed_at"]
+            app.refresh_pages()
+        with app.app.test_client() as client:
+            data = client.get("/predictions").get_json()
+        self.assertEqual(data["league_changed_at"]["esb8"], first_changed_at)
+
+    def test_old_cache_is_marked_stale_even_without_failed_refresh(self):
+        old = (datetime.now(timezone.utc) - timedelta(minutes=7)).isoformat()
+        with app.cache_lock:
+            app.cache["stale"] = False
+            for key in app.LEAGUES:
+                app.cache["leagues"][key] = {
+                    "fixtures": [{"home_tag": "old"}], "fetched_at": old,
+                    "changed_at": old, "status": "ok",
+                }
+        with app.app.test_client() as client:
+            data = client.get("/predictions").get_json()
+        self.assertTrue(data["stale"])
 
     def test_failed_league_retains_last_good_fixtures(self):
         with app.cache_lock:
@@ -116,6 +144,13 @@ class ReaderServiceTests(unittest.TestCase):
         page.get_by_text.return_value.count.return_value = 0
         self.assertFalse(reader.click_cloudflare(page))
         page.mouse.click.assert_not_called()
+
+    def test_visit_waits_for_fixture_rows(self):
+        page = MagicMock()
+        with patch.object(reader, "clear_cloudflare", return_value=True):
+            reader.visit(page, "https://www.forebet.com/en/esoccer", fixture_page=True)
+        page.wait_for_function.assert_called_once()
+        page.wait_for_timeout.assert_not_called()
 
 
 if __name__ == "__main__":
