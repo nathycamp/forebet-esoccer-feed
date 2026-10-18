@@ -183,8 +183,6 @@ def read_pages():
             proxy=proxy,
             args=["--no-sandbox", "--disable-dev-shm-usage"],
             viewport={"width": 1280, "height": 800},
-            timezone_id="UTC",
-            locale="en-GB",
         )
         try:
             page = context.pages[0] if context.pages else context.new_page()
