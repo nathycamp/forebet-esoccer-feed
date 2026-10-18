@@ -4,8 +4,7 @@ import logging
 import os
 from datetime import datetime, timezone
 
-from playwright.sync_api import sync_playwright
-from playwright_stealth import stealth_sync
+from patchright.sync_api import sync_playwright
 
 
 logger = logging.getLogger(__name__)
@@ -15,18 +14,6 @@ LEAGUES = {
     "h2hgg": "https://www.forebet.com/en/esoccer/esoccer-h2h-gg-league-8-mins-play",
     "gt12": "https://www.forebet.com/en/esoccer/esoccer-liga-pro-12-mins-play",
 }
-USER_AGENT = (
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-    "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-)
-EXTRA_STEALTH = """
-Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
-Object.defineProperty(navigator, 'plugins', { get: () => [1, 2, 3, 4, 5] });
-Object.defineProperty(navigator, 'languages', { get: () => ['en-US', 'en'] });
-window.chrome = { runtime: {} };
-"""
-
-
 def is_challenged(page):
     title = page.title().lower()
     try:
@@ -101,25 +88,19 @@ def read_pages():
         "password": os.environ["SHIFTER_PASS"],
     }
     pages = {}
+    profile = os.environ.get("BROWSER_PROFILE_DIR", "/tmp/forebet-chrome-profile")
+    os.makedirs(profile, exist_ok=True)
     with sync_playwright() as playwright:
-        browser = playwright.chromium.launch(
-            headless=True,
+        context = playwright.chromium.launch_persistent_context(
+            profile,
+            channel="chrome",
+            headless=False,
             proxy=proxy,
-            args=["--no-sandbox", "--disable-blink-features=AutomationControlled", "--disable-dev-shm-usage"],
+            args=["--no-sandbox", "--disable-dev-shm-usage"],
+            viewport={"width": 1280, "height": 800},
         )
         try:
-            context = browser.new_context(
-                user_agent=USER_AGENT,
-                viewport={"width": 1280, "height": 800},
-                java_script_enabled=True,
-                has_touch=False,
-                is_mobile=False,
-                locale="en-US",
-                timezone_id="America/New_York",
-            )
-            page = context.new_page()
-            stealth_sync(page)
-            page.add_init_script(EXTRA_STEALTH)
+            page = context.pages[0] if context.pages else context.new_page()
             logger.info("Visiting Forebet homepage at %s", datetime.now(timezone.utc).isoformat())
             try:
                 visit(page, "https://www.forebet.com/")
@@ -131,11 +112,13 @@ def read_pages():
                     visit(page, url)
                     html = page.content()
                     text = page.inner_text("body")
+                    if len(text.strip()) < 100:
+                        raise RuntimeError("Rendered page text is empty or incomplete")
                     pages[key] = {"html": html, "text": text, "status": "ok"}
                     logger.info("Read %s: %d text characters", key, len(text))
                 except Exception as exc:
                     pages[key] = {"status": "error", "error": str(exc)}
                     logger.exception("Failed to read %s", key)
         finally:
-            browser.close()
+            context.close()
     return pages
