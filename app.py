@@ -8,7 +8,6 @@ from datetime import datetime, timezone
 from apscheduler.schedulers.background import BackgroundScheduler
 from flask import Flask, jsonify
 
-from ingest import post_pages
 from reader import LEAGUES, read_pages
 
 
@@ -34,8 +33,7 @@ def refresh_pages():
     try:
         results = read_pages()
         successful = {key: page for key, page in results.items() if page.get("status") == "ok"}
-        posted = post_pages(successful, attempted_at) if successful else False
-        complete = len(successful) == len(LEAGUES) and posted
+        complete = len(successful) == len(LEAGUES)
         with cache_lock:
             cache["pages"].update(successful)
             cache["last_fetch"] = attempted_at
@@ -43,7 +41,7 @@ def refresh_pages():
                 cache["fetched_at"] = attempted_at
             cache["last_status"] = "ok" if complete else "error"
             cache["stale"] = not complete
-        logger.info("Reader cycle: %d/%d leagues read; ingest %s", len(successful), len(LEAGUES), "ok" if posted else "failed")
+        logger.info("Reader cycle: %d/%d leagues read", len(successful), len(LEAGUES))
     except Exception:
         logger.exception("Reader cycle failed")
         with cache_lock:
@@ -73,7 +71,7 @@ def predictions():
                 pages[key] = {
                     "status": "ok",
                     "text_length": len(text),
-                    "text": text[:500] + ("..." if len(text) > 500 else ""),
+                    "text": text,
                 }
             else:
                 pages[key] = {"status": "error", "text_length": 0, "text": ""}

@@ -2,7 +2,6 @@ import unittest
 from unittest.mock import MagicMock, patch
 
 import app
-import ingest
 import reader
 
 
@@ -17,7 +16,7 @@ class ReaderServiceTests(unittest.TestCase):
                 "pages": {},
             })
 
-    def test_health_and_preview(self):
+    def test_health_and_full_page_text(self):
         with app.app.test_client() as client:
             self.assertEqual(client.get("/").get_json(), {
                 "status": "ok", "last_fetch": None, "last_status": "error"
@@ -25,13 +24,13 @@ class ReaderServiceTests(unittest.TestCase):
         with patch.object(app, "read_pages", return_value={
             key: {"html": "<body>hello</body>", "text": "hello" * 120, "status": "ok"}
             for key in app.LEAGUES
-        }), patch.object(app, "post_pages", return_value=True):
+        }):
             app.refresh_pages()
         with app.app.test_client() as client:
             data = client.get("/predictions").get_json()
         self.assertFalse(data["stale"])
         self.assertEqual(data["pages"]["esb8"]["text_length"], 600)
-        self.assertEqual(len(data["pages"]["esb8"]["text"]), 503)
+        self.assertEqual(data["pages"]["esb8"]["text"], "hello" * 120)
 
     def test_failed_league_retains_last_good_text(self):
         with app.cache_lock:
@@ -39,20 +38,12 @@ class ReaderServiceTests(unittest.TestCase):
         with patch.object(app, "read_pages", return_value={
             "esb8": {"status": "error", "error": "challenged"},
             "volta6": {"html": "new", "text": "new text", "status": "ok"},
-        }), patch.object(app, "post_pages", return_value=True):
+        }):
             app.refresh_pages()
         with app.app.test_client() as client:
             data = client.get("/predictions").get_json()
         self.assertTrue(data["stale"])
         self.assertEqual(data["pages"]["esb8"]["text"], "old text")
-
-    @patch.object(ingest.requests, "post")
-    def test_ingest_sends_full_text(self, post):
-        self.assertTrue(ingest.post_pages({"esb8": {
-            "status": "ok", "text": "full text", "html": "<html>full text</html>"
-        }}, "2026-10-18T17:00:00Z"))
-        self.assertEqual(post.call_args.kwargs["json"]["pages"], {"esb8": "full text"})
-        self.assertEqual(post.call_args.kwargs["timeout"], 30)
 
     def test_cloudflare_click_and_wait(self):
         page = MagicMock()
