@@ -50,6 +50,9 @@ PICK_FIELDS = {
 }
 # Replays of the feed's own results showed a goals edge at the league line only here.
 TRUSTED_GOAL_LEAGUES = {"esb8", "volta6"}
+# Near-even calls and players new to the feed carry no real model opinion.
+MIN_CALL_PROBABILITY = .55
+MIN_PLAYER_GAMES = 5
 picks_lock = threading.Lock()
 picks_cache = {"key": None, "result": None}
 
@@ -306,8 +309,15 @@ def build_picks(feed, now):
                 pick["call_status"] = "withheld: no league results"
             else:
                 over = forecast["totals"][str(line)]["over"]
-                pick.update({"goals_call": "over" if over >= .5 else "under",
-                             "goals_probability": round(max(over, 1 - over), 4)})
+                probability = max(over, 1 - over)
+                history = min(forecast["evidence"][side]["history_matches"] for side in ("home", "away"))
+                pick["goals_probability"] = round(probability, 4)
+                if history < MIN_PLAYER_GAMES:
+                    pick["call_status"] = "no call: new players"
+                elif probability < MIN_CALL_PROBABILITY:
+                    pick["call_status"] = "no call: too close"
+                else:
+                    pick["goals_call"] = "over" if over >= .5 else "under"
             picks.append(pick)
         leagues[key] = picks
     return {"generated_at": forecasts["generated_at"], "source_fetched_at": feed["fetched_at"],

@@ -152,6 +152,16 @@ class PicksTests(unittest.TestCase):
         self.assertEqual(alice['favourite'], 'Alice')
         self.assertEqual(alice['favourite_strength'], 'weak')
         self.assertEqual(alice['call_status'], 'ok')
+        carol = esb8[1]
+        self.assertIsNone(carol['goals_call'])
+        self.assertEqual(carol['call_status'], 'no call: new players')
+
+    def test_near_even_calls_are_not_made(self):
+        with patch.object(app, 'MIN_CALL_PROBABILITY', 1.):
+            pick = self.client.get('/picks?league=esb8').get_json()['leagues']['esb8'][0]
+        self.assertIsNone(pick['goals_call'])
+        self.assertEqual(pick['call_status'], 'no call: too close')
+        self.assertGreaterEqual(pick['goals_probability'], .5)
 
     def test_picks_accept_the_same_filters(self):
         result = self.client.get('/picks?league=volta6,esb8&player=carol&fields=home_tag,goals_call').get_json()

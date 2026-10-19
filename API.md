@@ -62,12 +62,12 @@ gzip and ETag behavior.
 | Field | Meaning |
 |---|---|
 | `goals_line` | The league's usual line: mean total goals of this snapshot's results, rounded down to x.5 |
-| `goals_call`, `goals_probability` | `over` or `under` that line, and the model's probability for that side |
+| `goals_call`, `goals_probability` | `over` or `under` that line, and the model's probability for the likelier side. `goals_call` is null below 55%, or when either player has fewer than 5 results in the snapshot |
 | `expected_goals` | Model's expected total goals |
 | `goals_confidence` | `trusted` for esb8 and volta6, where replays showed an edge; `low` otherwise |
 | `favourite`, `favourite_probability` | Home tag, away tag or `draw`, from form probabilities pulled halfway to league outcome rates |
 | `favourite_strength` | Always `weak`: winner forecasts did not beat league outcome rates in replays |
-| `call_status` | `ok`, or why calls are withheld (`withheld: stale source`, `withheld: no league results`) |
+| `call_status` | `ok`; `no call: too close` or `no call: new players`; or why calls are withheld (`withheld: stale source`, `withheld: no league results`) |
 | `warnings` | Model warnings, such as limited player history |
 
 ```text
