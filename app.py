@@ -47,6 +47,7 @@ PICK_FIELDS = {
     "goals_line", "goals_call", "goals_probability", "expected_goals",
     "goals_confidence", "favourite", "favourite_probability",
     "favourite_strength", "call_status", "warnings",
+    "one_x_two", "double_chance", "winner_markets_trust",
 }
 # Replays of the feed's own results showed a goals edge at the league line only here.
 TRUSTED_GOAL_LEAGUES = {"esb8", "volta6"}
@@ -55,6 +56,11 @@ MIN_CALL_PROBABILITY = .55
 MIN_PLAYER_GAMES = 5
 # Form changes between sessions, so only imminent games get picks.
 PICK_WINDOW_MINUTES = 20
+# Replays: over/under at the league line beat league rates in esb8 and volta6
+# (73% landed at 60%+), while model 1X2 and double-chance picks did worse than
+# simply taking the league's most common result. Only goals calls can be top picks.
+TOP_PICK_MIN_PROBABILITY = .60
+TOP_PICKS = 2
 picks_lock = threading.Lock()
 picks_cache = {"key": None, "result": None}
 
@@ -304,9 +310,15 @@ def build_picks(feed, now):
                          "favourite": {"1": forecast["home_tag"], "2": forecast["away_tag"], "X": "draw"}[favourite],
                          "favourite_probability": round(winner[favourite], 4),
                          "favourite_strength": "weak", "call_status": "ok",
-                         "warnings": forecast["warnings"]})
+                         "warnings": forecast["warnings"],
+                         "one_x_two": {side: round(p, 4) for side, p in winner.items()},
+                         "double_chance": {"1X": round(winner["1"] + winner["X"], 4),
+                                           "X2": round(winner["X"] + winner["2"], 4),
+                                           "12": round(winner["1"] + winner["2"], 4)},
+                         "winner_markets_trust": "not trusted: did not beat league rates in replays"})
             if diagnostics["stale"]:
-                pick.update({"call_status": "withheld: stale source", "favourite": None, "favourite_probability": None})
+                pick.update({"call_status": "withheld: stale source", "favourite": None, "favourite_probability": None,
+                             "one_x_two": None, "double_chance": None})
             elif line is None:
                 pick["call_status"] = "withheld: no league results"
             else:
@@ -354,6 +366,7 @@ def picks():
         return jsonify({"error": "picks unavailable"}), 503
     payload["league_fetched_at"] = {key: value for key, value in payload["league_fetched_at"].items() if key in selected}
     leagues = {}
+    candidates = []
     for key in LEAGUES:
         if key not in selected:
             continue
@@ -366,12 +379,20 @@ def picks():
             rows = [row for row in rows if (row["kickoff_utc"] == rows[0]["kickoff_utc"]
                                             or not is_future_fixture(row, horizon))
                     and (player is None or matches_player(row, player))]
+            if key in TRUSTED_GOAL_LEAGUES:
+                candidates += [dict(row, league=key) for row in rows if row["goals_call"]
+                               and row["goals_probability"] >= TOP_PICK_MIN_PROBABILITY]
             if limit is not None:
                 rows = rows[:limit]
             if fields is not None:
                 rows = [{name: value for name, value in row.items() if name in fields} for row in rows]
         leagues[key] = rows
     payload["leagues"] = leagues
+    top = sorted(candidates, key=lambda row: row["goals_probability"], reverse=True)[:TOP_PICKS]
+    if fields is not None:
+        top = [{name: value for name, value in row.items() if name in fields or name == "league"} for row in top]
+    payload["top_picks"] = top
+    payload["top_picks_status"] = "ok" if top else "no top pick right now"
     return feed_response(payload)
 
 

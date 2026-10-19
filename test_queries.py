@@ -184,6 +184,27 @@ class PicksTests(unittest.TestCase):
         self.assertIn('live_score_evidence_used', busy['warnings'])
         self.assertNotIn('live_score_evidence_used', quiet['warnings'])
 
+    def test_top_picks_are_strongest_trusted_goal_calls(self):
+        with patch.object(app, 'TOP_PICK_MIN_PROBABILITY', .5):
+            result = self.client.get('/picks').get_json()
+        top = result['top_picks']
+        self.assertEqual(result['top_picks_status'], 'ok')
+        self.assertLessEqual(len(top), app.TOP_PICKS)
+        self.assertTrue(all(pick['league'] in app.TRUSTED_GOAL_LEAGUES and pick['goals_call'] for pick in top))
+        self.assertEqual([p['goals_probability'] for p in top], sorted((p['goals_probability'] for p in top), reverse=True))
+        with patch.object(app, 'TOP_PICK_MIN_PROBABILITY', 1.):
+            result = self.client.get('/picks').get_json()
+        self.assertEqual(result['top_picks'], [])
+        self.assertEqual(result['top_picks_status'], 'no top pick right now')
+        result = self.client.get('/picks?league=gt12').get_json()
+        self.assertEqual(result['top_picks'], [])
+
+    def test_winner_markets_are_information_only(self):
+        pick = self.client.get('/picks?league=esb8').get_json()['leagues']['esb8'][0]
+        self.assertAlmostEqual(sum(pick['one_x_two'].values()), 1, places=3)
+        self.assertAlmostEqual(pick['double_chance']['1X'], pick['one_x_two']['1'] + pick['one_x_two']['X'], places=3)
+        self.assertTrue(pick['winner_markets_trust'].startswith('not trusted'))
+
     def test_near_even_calls_are_not_made(self):
         with patch.object(app, 'MIN_CALL_PROBABILITY', 1.):
             pick = self.client.get('/picks?league=esb8').get_json()['leagues']['esb8'][0]

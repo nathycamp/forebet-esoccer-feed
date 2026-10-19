@@ -72,6 +72,13 @@ gzip and ETag behavior.
 | `favourite_strength` | Always `weak`: winner forecasts did not beat league outcome rates in replays |
 | `call_status` | `ok`; `no call: too close` or `no call: new players`; or why calls are withheld (`withheld: stale source`, `withheld: no league results`) |
 | `warnings` | Model warnings, such as limited player history |
+| `one_x_two`, `double_chance` | Home/draw/away and 1X/X2/12 probabilities, for information only (`winner_markets_trust`: not trusted, since they did not beat league outcome rates in replays) |
+
+`top_picks` lists up to two of the strongest goals calls across the selected
+leagues: esb8 or volta6, at least 60%, within the pick window, each with its
+`league`. Over/under is the only market offered there; replays found model
+1X2 and double-chance choices did worse than the league's most common result.
+`top_picks_status` is `no top pick right now` when nothing qualifies.
 
 ```text
 /picks?league=esb8,volta6&limit=3
