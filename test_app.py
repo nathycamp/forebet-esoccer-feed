@@ -195,6 +195,10 @@ class ReaderServiceTests(unittest.TestCase):
         corrected = dict(live, kickoff_utc=(now-timedelta(minutes=4)).isoformat())
         self.assertEqual(reader.check_live_clock([corrected], now)["status"], "consistent")
         self.assertEqual(reader.check_live_clock([], now)["status"], "unverified_no_live_clock")
+        awaiting_ft = {"status": "live", "match_clock": "12",
+                       "kickoff_utc": (now-timedelta(minutes=25)).isoformat()}
+        self.assertEqual(reader.check_live_clock([awaiting_ft], now, 12)["status"], "unverified_no_live_clock")
+        self.assertEqual(reader.check_live_clock([dict(awaiting_ft, match_clock="11")], now, 12)["status"], "mismatch")
         with app.cache_lock:
             app.cache["stale"] = False
             for key in app.LEAGUES:

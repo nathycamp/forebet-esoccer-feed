@@ -26,7 +26,11 @@ def predict_feed(feed, *, now=None, use_common_opponents=False):
         source_at = feed.get("league_fetched_at", {}).get(league) or feed.get("fetched_at")
         try:
             source_age = (now - utc(source_at)).total_seconds()
-            stale = bool(feed.get("stale", True)) or source_age > 360 or source_age < -60
+            # Per-league freshness and clock checks replace the feed-wide flag,
+            # so one league's problem does not withhold every league's picks.
+            has_league_time = bool(feed.get("league_fetched_at", {}).get(league))
+            stale = ((not has_league_time and bool(feed.get("stale", True)))
+                     or source_age > 360 or source_age < -60)
         except (TypeError, ValueError, AttributeError):
             source_age, stale = None, True
         clock_check = feed.get("league_clock_checks", {}).get(league) or {}

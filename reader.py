@@ -18,6 +18,7 @@ LEAGUES = {
     "h2hgg": "https://www.forebet.com/en/esoccer/esoccer-h2h-gg-league-8-mins-play",
     "gt12": "https://www.forebet.com/en/esoccer/esoccer-liga-pro-12-mins-play",
 }
+MATCH_MINUTES = {"esb8": 8, "volta6": 6, "h2hgg": 8, "gt12": 12}
 FIXTURE_FIELDS = r"""() => Array.from(document.querySelectorAll('.rcnt'))
     .filter(row => row.querySelector(':scope > .predict, :scope > .predict_y, :scope > .predict_no'))
     .map(row => {
@@ -146,12 +147,17 @@ def extract_fixtures(page, league):
     return fixtures
 
 
-def check_live_clock(fixtures, observed_at):
-    """Detect clock drift without guessing a new offset or making requests."""
+def check_live_clock(fixtures, observed_at, duration=None):
+    """Detect clock drift without guessing a new offset or making requests.
+
+    A clock held at full time while Forebet awaits FT keeps aging, so only
+    clocks before the league's final minute are compared.
+    """
     residuals = []
+    last_minute = duration - 1 if duration else 20
     for row in fixtures:
         clock = str(row.get("match_clock") or "").strip().rstrip("'′")
-        if row["status"] != "live" or not clock.isdigit() or not 0 <= int(clock) <= 20:
+        if row["status"] != "live" or not clock.isdigit() or not 0 <= int(clock) <= last_minute:
             continue
         kickoff = datetime.fromisoformat(row["kickoff_utc"])
         residuals.append((observed_at-kickoff).total_seconds()/60-int(clock))
@@ -295,7 +301,7 @@ def read_pages():
                         "fixtures": fixtures,
                         "status": "ok",
                         "fetched_at": observed_at.isoformat().replace("+00:00", "Z"),
-                        "clock_check": check_live_clock(fixtures, observed_at),
+                        "clock_check": check_live_clock(fixtures, observed_at, MATCH_MINUTES[key]),
                     }
                 except Exception as exc:
                     leagues[key] = {"status": "error", "error": str(exc)}

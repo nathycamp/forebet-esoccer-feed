@@ -274,6 +274,17 @@ class PredictionTests(unittest.TestCase):
         self.assertIsNone(result["leagues"]["gt12"][0]["pick"])
         self.assertTrue(result["diagnostics"]["gt12"]["stale"])
 
+    def test_one_league_clock_mismatch_leaves_other_leagues_fresh(self):
+        feed = snapshot(self.played+[self.future])
+        feed["stale"] = True
+        feed["league_fetched_at"] = {key: NOW.isoformat() for key in feed["leagues"]}
+        feed["league_clock_checks"] = {"gt12": {"status": "mismatch"}}
+        result = predict_feed(feed, now=NOW)
+        self.assertTrue(result["stale"])
+        self.assertTrue(result["diagnostics"]["gt12"]["stale"])
+        self.assertFalse(result["diagnostics"]["esb8"]["stale"])
+        self.assertNotIn("source_feed_stale", result["leagues"]["esb8"][0]["warnings"])
+
 
 if __name__ == "__main__":
     unittest.main()

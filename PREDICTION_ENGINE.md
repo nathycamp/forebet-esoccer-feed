@@ -191,7 +191,10 @@ kickoff without a final score is counted in
 `diagnostics[league].past_kickoff_without_result`. A league with no future games
 returns an empty array. Forecasts from an old or explicitly stale snapshot carry
 `source_feed_stale`. A snapshot is old after six minutes. Missing timestamps
-also mark it stale.
+also mark it stale. Staleness is judged per league from `league_fetched_at`
+and `league_clock_checks`, so one league's problem does not withhold picks in
+the others; the feed-wide `stale` flag is used only when a league has no
+fetch time of its own. The top-level `stale` output still reports any league.
 
 `data_quality` describes sample availability; it is not an accuracy score.
 `most_likely_score` can still have a small probability. Every forecast is labeled
@@ -254,8 +257,9 @@ Fixtures retain `source_kickoff_utc`, `source_display_time`,
 `source_utc_offset_minutes`, `kickoff_correction_minutes`, and
 `kickoff_time_status`. The response also includes `league_clock_checks`.
 The check compares corrected kickoffs with numeric live clocks without making
-requests or retaining history. A median discrepancy over seven minutes marks
-the feed stale. No live clocks means unverified, not proof of correct timing.
+requests or retaining history. Clocks at the league's final minute are
+ignored, because they stay frozen while Forebet waits to post full time. A
+median discrepancy over seven minutes marks the feed stale. No live clocks means unverified, not proof of correct timing.
 
 The package rejects live games as forecast targets. Live observations are
 recognized and excluded from training without being reported as malformed.
