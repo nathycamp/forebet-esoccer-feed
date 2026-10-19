@@ -1,8 +1,10 @@
 """Read rendered Forebet pages through the Shifter residential proxy."""
 
 import logging
+import json
 import os
 import re
+import sys
 from datetime import datetime, timezone
 
 from patchright.sync_api import sync_playwright
@@ -227,3 +229,9 @@ def read_pages():
         finally:
             context.close()
     return leagues
+
+
+if __name__ == "__main__":
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s", stream=sys.stderr)
+    json.dump(read_pages(), sys.stdout)
+    sys.stdout.write("\n")

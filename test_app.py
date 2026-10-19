@@ -1,5 +1,6 @@
 import unittest
 from datetime import datetime, timedelta, timezone
+import subprocess
 from unittest.mock import MagicMock, patch
 
 import app
@@ -22,7 +23,7 @@ class ReaderServiceTests(unittest.TestCase):
             self.assertEqual(client.get("/").get_json(), {
                 "status": "ok", "last_fetch": None, "last_status": "error"
             })
-        with patch.object(app, "read_pages", return_value={
+        with patch.object(app, "run_reader", return_value={
             key: {"fixtures": [{"home_tag": "Mani", "kickoff_utc": "2026-10-18T16:55:00+00:00"}], "status": "ok"}
             for key in app.LEAGUES
         }):
@@ -36,7 +37,7 @@ class ReaderServiceTests(unittest.TestCase):
 
     def test_unchanged_fixtures_preserve_change_time(self):
         fixture = {"home_tag": "Mani"}
-        with patch.object(app, "read_pages", return_value={
+        with patch.object(app, "run_reader", return_value={
             key: {"fixtures": [fixture], "status": "ok"} for key in app.LEAGUES
         }):
             app.refresh_pages()
@@ -62,7 +63,7 @@ class ReaderServiceTests(unittest.TestCase):
     def test_failed_league_retains_last_good_fixtures(self):
         with app.cache_lock:
             app.cache["leagues"]["esb8"] = {"fixtures": [{"home_tag": "old"}], "status": "ok"}
-        with patch.object(app, "read_pages", return_value={
+        with patch.object(app, "run_reader", return_value={
             "esb8": {"status": "error", "error": "challenged"},
             "volta6": {"fixtures": [{"home_tag": "new"}], "status": "ok"},
         }):
@@ -151,6 +152,18 @@ class ReaderServiceTests(unittest.TestCase):
             reader.visit(page, "https://www.forebet.com/en/esoccer", fixture_page=True)
         page.wait_for_function.assert_called_once()
         page.wait_for_timeout.assert_not_called()
+
+    def test_hung_reader_is_killed(self):
+        process = MagicMock()
+        process.pid = 12345
+        process.communicate.side_effect = [
+            subprocess.TimeoutExpired("reader", app.READER_TIMEOUT_SECONDS),
+            (b"", None),
+        ]
+        with patch.object(app.subprocess, "Popen", return_value=process), patch.object(app.os, "killpg") as kill:
+            with self.assertRaises(TimeoutError):
+                app.run_reader()
+        kill.assert_called_once_with(12345, app.signal.SIGKILL)
 
 
 if __name__ == "__main__":

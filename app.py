@@ -1,14 +1,19 @@
 """Railway HTTP service for Forebet esoccer predictions."""
 
 import logging
+import json
 import os
+import signal
+import subprocess
+import sys
 import threading
 from datetime import datetime, timezone
+from pathlib import Path
 
 from apscheduler.schedulers.background import BackgroundScheduler
 from flask import Flask, jsonify
 
-from reader import LEAGUES, read_pages
+from reader import LEAGUES
 
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -23,16 +28,38 @@ cache = {
     "leagues": {},
 }
 MAX_CACHE_AGE_SECONDS = 6 * 60
+READER_TIMEOUT_SECONDS = 100
 
 
 def now_utc():
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
+def run_reader():
+    """Isolate Chrome so a stuck read cannot block future scheduled jobs."""
+    process = subprocess.Popen(
+        [sys.executable, "-u", str(Path(__file__).with_name("reader.py"))],
+        stdout=subprocess.PIPE,
+        start_new_session=True,
+    )
+    try:
+        output, _ = process.communicate(timeout=READER_TIMEOUT_SECONDS)
+    except subprocess.TimeoutExpired as exc:
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        process.communicate()
+        raise TimeoutError(f"Reader exceeded {READER_TIMEOUT_SECONDS} seconds") from exc
+    if process.returncode != 0:
+        raise RuntimeError(f"Reader exited with code {process.returncode}")
+    return json.loads(output)
+
+
 def refresh_pages():
     attempted_at = now_utc()
     try:
-        results = read_pages()
+        results = run_reader()
         completed_at = now_utc()
         successful = {key: page for key, page in results.items() if page.get("status") == "ok"}
         complete = len(successful) == len(LEAGUES)
