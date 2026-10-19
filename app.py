@@ -65,8 +65,8 @@ picks_lock = threading.Lock()
 picks_cache = {"key": None, "result": None}
 
 
-def query_options(fields_allowed=FIXTURE_FIELDS, with_status=True):
-    allowed = {"league", "player", "limit", "fields"} | ({"status"} if with_status else set())
+def query_options(fields_allowed=FIXTURE_FIELDS, with_status=True, extra=()):
+    allowed = {"league", "player", "limit", "fields", *extra} | ({"status"} if with_status else set())
     unknown = set(request.args) - allowed
     if unknown:
         raise ValueError("Unknown query parameter: " + ", ".join(sorted(unknown)))
@@ -83,7 +83,7 @@ def query_options(fields_allowed=FIXTURE_FIELDS, with_status=True):
     statuses = choices("status", {"live", "upcoming", "played"}, None)
     fields = choices("fields", fields_allowed, None)
     limit = None
-    for name in ("limit", "player"):
+    for name in ("limit", "player", *extra):
         if len(request.args.getlist(name)) > 1:
             raise ValueError(f"Specify {name} only once")
     if "limit" in request.args:
@@ -355,7 +355,13 @@ def current_picks(now):
 @app.get("/picks")
 def picks():
     try:
-        selected, _, fields, limit, player = query_options(PICK_FIELDS, with_status=False)
+        selected, _, fields, limit, player = query_options(PICK_FIELDS, with_status=False, extra=("top",))
+        top_count = None
+        if "top" in request.args:
+            value = request.args["top"]
+            if not value.isascii() or not value.isdecimal() or not 1 <= int(value) <= 10:
+                raise ValueError("top must be an integer between 1 and 10")
+            top_count = int(value)
     except ValueError as exc:
         return jsonify({"error": str(exc)}), 400
     now = datetime.now(timezone.utc)
@@ -380,19 +386,23 @@ def picks():
                                             or not is_future_fixture(row, horizon))
                     and (player is None or matches_player(row, player))]
             if key in TRUSTED_GOAL_LEAGUES:
-                candidates += [dict(row, league=key) for row in rows if row["goals_call"]
-                               and row["goals_probability"] >= TOP_PICK_MIN_PROBABILITY]
+                candidates += [dict(row, league=key, grade="strong" if row["goals_probability"] >= TOP_PICK_MIN_PROBABILITY
+                                    else "standard") for row in rows if row["goals_call"]
+                               and (top_count or row["goals_probability"] >= TOP_PICK_MIN_PROBABILITY)]
             if limit is not None:
                 rows = rows[:limit]
             if fields is not None:
                 rows = [{name: value for name, value in row.items() if name in fields} for row in rows]
         leagues[key] = rows
     payload["leagues"] = leagues
-    top = sorted(candidates, key=lambda row: row["goals_probability"], reverse=True)[:TOP_PICKS]
+    # ?top=N ranks every trusted goals call; by default only strong ones qualify.
+    top = sorted(candidates, key=lambda row: row["goals_probability"], reverse=True)[:top_count or TOP_PICKS]
     if fields is not None:
-        top = [{name: value for name, value in row.items() if name in fields or name == "league"} for row in top]
+        top = [{name: value for name, value in row.items() if name in fields or name in ("league", "grade")} for row in top]
     payload["top_picks"] = top
     payload["top_picks_status"] = "ok" if top else "no top pick right now"
+    if top_count:
+        del payload["leagues"]
     return feed_response(payload)
 
 

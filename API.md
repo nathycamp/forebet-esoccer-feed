@@ -80,6 +80,16 @@ leagues: esb8 or volta6, at least 60%, within the pick window, each with its
 1X2 and double-chance choices did worse than the league's most common result.
 `top_picks_status` is `no top pick right now` when nothing qualifies.
 
+`top=N` (1–10) returns only `top_picks`: the N highest-probability goals calls
+in esb8 and volta6 within the window, even below 60%. Each carries `grade`:
+`strong` at 60% or more, otherwise `standard`. `league`, `player` and
+`fields` still apply.
+
+```text
+/picks?top=2
+/picks?top=2&fields=home_tag,away_tag,kickoff_utc,goals_line,goals_call,goals_probability
+```
+
 ```text
 /picks?league=esb8,volta6&limit=3
 /picks?player=Mani&fields=home_tag,away_tag,kickoff_utc,goals_line,goals_call,goals_probability,favourite

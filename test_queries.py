@@ -199,6 +199,22 @@ class PicksTests(unittest.TestCase):
         result = self.client.get('/picks?league=gt12').get_json()
         self.assertEqual(result['top_picks'], [])
 
+    def test_top_query_returns_only_the_safest_trusted_calls(self):
+        with patch.object(app, 'TOP_PICK_MIN_PROBABILITY', 1.):
+            result = self.client.get('/picks?top=2').get_json()
+        self.assertNotIn('leagues', result)
+        top = result['top_picks']
+        self.assertEqual(len(top), 2)
+        self.assertTrue(all(pick['league'] in app.TRUSTED_GOAL_LEAGUES and pick['goals_call'] for pick in top))
+        self.assertTrue(all(pick['grade'] == 'standard' for pick in top))
+        self.assertGreaterEqual(top[0]['goals_probability'], top[1]['goals_probability'])
+        result = self.client.get('/picks?top=1&league=volta6&fields=home_tag,goals_call').get_json()
+        self.assertEqual(set(result['top_picks'][0]), {'home_tag', 'goals_call', 'league', 'grade'})
+        self.assertEqual(result['top_picks'][0]['league'], 'volta6')
+        for query in ('top=0', 'top=11', 'top=x', 'top=1&top=2'):
+            with self.subTest(query=query):
+                self.assertEqual(self.client.get('/picks?'+query).status_code, 400)
+
     def test_winner_markets_are_information_only(self):
         pick = self.client.get('/picks?league=esb8').get_json()['leagues']['esb8'][0]
         self.assertAlmostEqual(sum(pick['one_x_two'].values()), 1, places=3)
