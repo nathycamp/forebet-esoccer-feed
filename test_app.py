@@ -123,6 +123,7 @@ class ReaderServiceTests(unittest.TestCase):
             "p1": 46, "px": 23, "p2": 31, "pred": "1",
             "correct_score": "4-3", "avg_goals": 6.11,
             "status": "upcoming", "actual_score": None,
+            "live_score": None, "match_clock": None,
         })
         self.assertEqual(reader.parse_kickoff("10/18/2026 4:55 PM").isoformat(),
                          "2026-10-18T16:55:00+00:00")
@@ -138,6 +139,26 @@ class ReaderServiceTests(unittest.TestCase):
         self.assertEqual(fixture["status"], "played")
         self.assertEqual(fixture["actual_score"], "2-4")
         self.assertEqual(fixture["correct_score"], "2-3")
+
+    def test_live_score_is_separate_from_final_and_predicted_scores(self):
+        fields = {
+            "home": "Arsenal (Walnut)", "away": "PSG (Scorpion)",
+            "date": "19/10/2026 13:30", "probabilities": ["23", "40", "37"],
+            "pred": "X", "score": "3 - 3", "avg_goals": "4.85",
+            "status": "live", "actual_score": "", "live_score": "2 - 0",
+            "match_clock": "7",
+        }
+        live = reader.parse_fixture(fields)
+        self.assertEqual(live["status"], "live")
+        self.assertEqual(live["live_score"], "2-0")
+        self.assertEqual(live["match_clock"], "7")
+        self.assertIsNone(live["actual_score"])
+        self.assertEqual(live["correct_score"], "3-3")
+        fields.update(status="played", actual_score="2 - 1", live_score="", match_clock="FT")
+        finished = reader.parse_fixture(fields)
+        self.assertEqual(finished["actual_score"], "2-1")
+        self.assertIsNone(finished["live_score"])
+        self.assertEqual(finished["match_clock"], "FT")
 
     def test_cloudflare_click_and_wait(self):
         page = MagicMock()

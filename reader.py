@@ -17,11 +17,14 @@ LEAGUES = {
     "h2hgg": "https://www.forebet.com/en/esoccer/esoccer-h2h-gg-league-8-mins-play",
     "gt12": "https://www.forebet.com/en/esoccer/esoccer-liga-pro-12-mins-play",
 }
-FIXTURE_FIELDS = """() => Array.from(document.querySelectorAll('.rcnt'))
+FIXTURE_FIELDS = r"""() => Array.from(document.querySelectorAll('.rcnt'))
     .filter(row => row.querySelector(':scope > .predict, :scope > .predict_y, :scope > .predict_no'))
     .map(row => {
         const field = selector => row.querySelector(selector)?.innerText.trim() || '';
-        const finished = field(':scope > .lmin_td').includes('FT');
+        const clock = field(':scope > .lmin_td');
+        const currentScore = field(':scope > .lscr_td .l_scr');
+        const finished = /\bFT\b/i.test(clock);
+        const live = !finished && (Boolean(currentScore) || (Boolean(clock) && clock !== '0'));
         return {
             home: field('.homeTeam'),
             away: field('.awayTeam'),
@@ -31,8 +34,10 @@ FIXTURE_FIELDS = """() => Array.from(document.querySelectorAll('.rcnt'))
             pred: field(':scope > .predict .forepr, :scope > .predict_y .forepr, :scope > .predict_no .forepr'),
             score: field(':scope > .ex_sc.tabonly'),
             avg_goals: field(':scope > .avg_sc.tabonly'),
-            status: finished ? 'played' : 'upcoming',
-            actual_score: finished ? field(':scope > .lscr_td .l_scr') : '',
+            status: finished ? 'played' : live ? 'live' : 'upcoming',
+            actual_score: finished ? currentScore : '',
+            live_score: live ? currentScore : '',
+            match_clock: finished || live ? clock : '',
         };
     })"""
 
@@ -68,7 +73,7 @@ def parse_fixture(fields):
     if not score:
         raise ValueError("invalid predicted score")
     status = fields["status"]
-    if status not in {"played", "upcoming"}:
+    if status not in {"played", "live", "upcoming"}:
         raise ValueError("invalid fixture status")
     actual_score = None
     if status == "played":
@@ -76,6 +81,14 @@ def parse_fixture(fields):
         if not result:
             raise ValueError("invalid final score")
         actual_score = f"{result.group(1)}-{result.group(2)}"
+    live_score = None
+    if status == "live" and fields.get("live_score"):
+        result = re.fullmatch(r"(\d+)\s*-\s*(\d+)", fields["live_score"])
+        if result:
+            live_score = f"{result.group(1)}-{result.group(2)}"
+        else:
+            logger.warning("Invalid live score for %s vs %s", home_tag, away_tag)
+    match_clock = fields.get("match_clock") or None
     avg_goals = float(fields["avg_goals"])
     if avg_goals < 0:
         raise ValueError("invalid average goals")
@@ -93,6 +106,8 @@ def parse_fixture(fields):
         "avg_goals": avg_goals,
         "status": status,
         "actual_score": actual_score,
+        "live_score": live_score,
+        "match_clock": match_clock,
     }
 
 
