@@ -169,6 +169,16 @@ class ReaderServiceTests(unittest.TestCase):
         page.wait_for_function.assert_called_once()
         page.wait_for_timeout.assert_not_called()
 
+    def test_visual_asset_blocking_keeps_cloudflare_and_scripts_available(self):
+        context = MagicMock()
+        session = reader.block_forebet_assets(context, MagicMock())
+        methods = [call.args[0] for call in session.send.call_args_list]
+        self.assertEqual(methods, ["Network.enable", "Network.setBlockedURLs"])
+        patterns = session.send.call_args_list[1].args[1]["urls"]
+        self.assertTrue(any("png" in pattern for pattern in patterns))
+        self.assertTrue(all("forebet.com" in pattern for pattern in patterns))
+        self.assertFalse(any("cloudflare.com" in pattern for pattern in patterns))
+
     def test_hung_reader_is_killed(self):
         process = MagicMock()
         process.pid = 12345

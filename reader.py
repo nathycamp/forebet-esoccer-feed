@@ -188,6 +188,19 @@ def visit(page, url, fixture_page=False):
         page.wait_for_timeout(1000)
 
 
+def block_forebet_assets(context, page):
+    """Skip visual assets on league pages without disabling Chrome's HTTP cache."""
+    extensions = ("png", "jpg", "jpeg", "gif", "webp", "avif", "svg", "ico",
+                  "woff", "woff2", "ttf", "otf", "mp4", "webm")
+    session = context.new_cdp_session(page)
+    session.send("Network.enable")
+    session.send("Network.setBlockedURLs", {
+        "urls": [f"*forebet.com/*.{extension}*" for extension in extensions],
+    })
+    logger.info("Blocking Forebet image, font and media URLs on league pages")
+    return session
+
+
 def read_pages():
     """Return each league's parsed fixtures, or an error status."""
     username = os.environ["SHIFTER_USER"]
@@ -216,6 +229,11 @@ def read_pages():
             logger.info("Visiting Forebet homepage at %s", datetime.now(timezone.utc).isoformat())
             try:
                 visit(page, "https://www.forebet.com/")
+                if os.environ.get("BLOCK_FOREBET_ASSETS", "1") == "1":
+                    try:
+                        block_forebet_assets(context, page)
+                    except Exception:
+                        logger.exception("Could not block visual assets; continuing normally")
             except Exception:
                 logger.exception("Homepage visit failed; continuing with league pages")
             for key, url in LEAGUES.items():
