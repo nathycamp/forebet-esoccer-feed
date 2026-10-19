@@ -70,6 +70,11 @@ class PredictionTests(unittest.TestCase):
         augmented = LeagueModel(self.played + [future_result, late_result], NOW).predict(self.future)
         self.assertEqual(baseline, augmented)
 
+    def test_null_result_publication_time_means_unknown(self):
+        rows = [dict(row, result_seen_at=None) for row in self.played]
+        result = predict_feed(snapshot(rows + [self.future]), now=NOW)
+        self.assertEqual(result["diagnostics"]["esb8"]["completed_games_used"], 30)
+
     def test_leagues_are_isolated_and_inputs_not_modified(self):
         feed = snapshot(self.played + [self.future])
         original = copy.deepcopy(feed)

@@ -82,7 +82,7 @@ class LeagueModel:
         self.as_of = as_of
         self.rows = sorted((row for row in rows if row.get("status") == "played"
                             and row.get("actual_score") and utc(row["kickoff_utc"]) < as_of
-                            and utc(row.get("result_seen_at", as_of.isoformat())) <= as_of),
+                            and utc(row.get("result_seen_at") or as_of.isoformat()) <= as_of),
                            key=lambda row: utc(row["kickoff_utc"]))
         self.games = defaultdict(list)
         self.player_names = {}
