@@ -120,6 +120,11 @@ class ReaderServiceTests(unittest.TestCase):
             "home_tag": "Jankulovski", "away_tag": "DEKSON",
             "home_club": "Bologna", "away_club": "Juventus",
             "kickoff_utc": "2026-10-18T16:55:00+00:00",
+            "source_kickoff_utc": "2026-10-18T16:55:00+00:00",
+            "source_display_time": "18/10/2026 16:55",
+            "source_utc_offset_minutes": 0,
+            "kickoff_correction_minutes": 0,
+            "kickoff_time_status": "source_unverified",
             "p1": 46, "px": 23, "p2": 31, "pred": "1",
             "correct_score": "4-3", "avg_goals": 6.11,
             "status": "upcoming", "actual_score": None,
@@ -159,6 +164,45 @@ class ReaderServiceTests(unittest.TestCase):
         self.assertEqual(finished["actual_score"], "2-1")
         self.assertIsNone(finished["live_score"])
         self.assertEqual(finished["match_clock"], "FT")
+
+    def test_kickoff_conversion_respects_display_offset_and_day_rollover(self):
+        self.assertEqual(reader.parse_kickoff("19/10/2026 23:45", -480).isoformat(),
+                         "2026-10-20T07:45:00+00:00")
+        # Etc/GMT+8 is UTC minus eight hours; fixed offset has no DST.
+        self.assertEqual(reader.parse_kickoff("19/10/2026 07:00", -480).isoformat(),
+                         "2026-10-19T15:00:00+00:00")
+        self.assertEqual(reader.parse_kickoff("19/10/2026 00:15", 330).isoformat(),
+                         "2026-10-18T18:45:00+00:00")
+
+    def test_explicit_source_clock_correction_preserves_original(self):
+        fields = {"home": "Arsenal (Walnut)", "away": "PSG (Scorpion)",
+                  "date": "19/10/2026 06:00", "display_utc_offset_minutes": -480,
+                  "probabilities": ["23", "40", "37"], "pred": "X", "score": "3 - 3",
+                  "avg_goals": "4.85", "status": "upcoming", "actual_score": ""}
+        with patch.dict("os.environ", {"FOREBET_KICKOFF_CORRECTION_MINUTES": "60"}):
+            row = reader.parse_fixture(fields)
+        self.assertEqual(row["source_kickoff_utc"], "2026-10-19T14:00:00+00:00")
+        self.assertEqual(row["kickoff_utc"], "2026-10-19T15:00:00+00:00")
+        self.assertEqual(row["kickoff_time_status"], "inferred_from_live_clocks")
+
+    def test_live_clock_check_detects_hour_drift_and_api_marks_it_stale(self):
+        now = datetime.now(timezone.utc)
+        live = {"status": "live", "match_clock": "2",
+                "kickoff_utc": (now-timedelta(minutes=64)).isoformat()}
+        with self.assertLogs(reader.logger, level="WARNING"):
+            check = reader.check_live_clock([live], now)
+        self.assertEqual(check["status"], "mismatch")
+        corrected = dict(live, kickoff_utc=(now-timedelta(minutes=4)).isoformat())
+        self.assertEqual(reader.check_live_clock([corrected], now)["status"], "consistent")
+        self.assertEqual(reader.check_live_clock([], now)["status"], "unverified_no_live_clock")
+        with app.cache_lock:
+            app.cache["stale"] = False
+            for key in app.LEAGUES:
+                app.cache["leagues"][key] = {"fixtures": [], "fetched_at": now.isoformat(),
+                                            "clock_check": check}
+        response = app.app.test_client().get("/predictions").get_json()
+        self.assertTrue(response["stale"])
+        self.assertEqual(response["league_clock_checks"]["gt12"]["status"], "mismatch")
 
     def test_cloudflare_click_and_wait(self):
         page = MagicMock()

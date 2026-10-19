@@ -5,7 +5,8 @@ import json
 import os
 import re
 import sys
-from datetime import datetime, timezone
+import statistics
+from datetime import datetime, timedelta, timezone
 
 from patchright.sync_api import sync_playwright
 
@@ -29,6 +30,11 @@ FIXTURE_FIELDS = r"""() => Array.from(document.querySelectorAll('.rcnt'))
             home: field('.homeTeam'),
             away: field('.awayTeam'),
             date: field('.date_bah'),
+            display_utc_offset_minutes: (() => {
+                const selected = document.querySelector('#tzSel')?.value;
+                return selected && selected !== 'no' && Number.isFinite(Number(selected))
+                    ? Number(selected) * 60 : -new Date().getTimezoneOffset();
+            })(),
             probabilities: Array.from(row.querySelectorAll(':scope > .fprc > span'),
                 span => span.innerText.trim()),
             pred: field(':scope > .predict .forepr, :scope > .predict_y .forepr, :scope > .predict_no .forepr'),
@@ -49,11 +55,12 @@ def parse_team(value):
     return match.group(1).strip(), match.group(2).strip()
 
 
-def parse_kickoff(value):
+def parse_kickoff(value, display_utc_offset_minutes=0):
     value = " ".join(value.split())
     for date_format in ("%d/%m/%Y %H:%M", "%m/%d/%Y %I:%M %p"):
         try:
-            return datetime.strptime(value, date_format).replace(tzinfo=timezone.utc)
+            displayed_zone = timezone(timedelta(minutes=float(display_utc_offset_minutes)))
+            return datetime.strptime(value, date_format).replace(tzinfo=displayed_zone).astimezone(timezone.utc)
         except ValueError:
             continue
     raise ValueError("invalid kickoff date")
@@ -62,7 +69,11 @@ def parse_kickoff(value):
 def parse_fixture(fields):
     home_club, home_tag = parse_team(fields["home"])
     away_club, away_tag = parse_team(fields["away"])
-    kickoff = parse_kickoff(fields["date"])
+    source_kickoff = parse_kickoff(fields["date"], fields.get("display_utc_offset_minutes", 0))
+    correction = int(os.environ.get("FOREBET_KICKOFF_CORRECTION_MINUTES", "0"))
+    if not -180 <= correction <= 180:
+        raise ValueError("kickoff correction must be within three hours")
+    kickoff = source_kickoff + timedelta(minutes=correction)
     probabilities = [int(value.strip().rstrip("%")) for value in fields["probabilities"]]
     if len(probabilities) != 3 or any(value < 0 or value > 100 for value in probabilities):
         raise ValueError("invalid 1X2 probabilities")
@@ -98,6 +109,11 @@ def parse_fixture(fields):
         "home_club": home_club,
         "away_club": away_club,
         "kickoff_utc": kickoff.isoformat(),
+        "source_kickoff_utc": source_kickoff.isoformat(),
+        "source_display_time": fields["date"],
+        "source_utc_offset_minutes": fields.get("display_utc_offset_minutes", 0),
+        "kickoff_correction_minutes": correction,
+        "kickoff_time_status": "inferred_from_live_clocks" if correction else "source_unverified",
         "p1": probabilities[0],
         "px": probabilities[1],
         "p2": probabilities[2],
@@ -128,6 +144,23 @@ def extract_fixtures(page, league):
         raise RuntimeError("No valid fixture rows found")
     logger.info("Parsed %s: %d/%d fixtures", league, len(fixtures), len(rows))
     return fixtures
+
+
+def check_live_clock(fixtures, observed_at):
+    """Detect clock drift without guessing a new offset or making requests."""
+    residuals = []
+    for row in fixtures:
+        clock = str(row.get("match_clock") or "").strip().rstrip("'′")
+        if row["status"] != "live" or not clock.isdigit() or not 0 <= int(clock) <= 20:
+            continue
+        kickoff = datetime.fromisoformat(row["kickoff_utc"])
+        residuals.append((observed_at-kickoff).total_seconds()/60-int(clock))
+    residual = statistics.median(residuals) if residuals else None
+    status = "unverified_no_live_clock" if residual is None else "consistent" if abs(residual) <= 7 else "mismatch"
+    if status == "mismatch":
+        logger.warning("Kickoff clock mismatch: %.1f minutes across %d live fixtures", residual, len(residuals))
+    return {"status": status, "live_fixtures_checked": len(residuals),
+            "median_residual_minutes": round(residual, 2) if residual is not None else None}
 
 
 def is_challenged(page):
@@ -238,6 +271,7 @@ def read_pages():
             proxy=proxy,
             args=["--no-sandbox", "--disable-dev-shm-usage"],
             viewport={"width": 1280, "height": 800},
+            timezone_id="UTC",
         )
         try:
             page = context.pages[0] if context.pages else context.new_page()
@@ -255,10 +289,13 @@ def read_pages():
                 logger.info("Reading %s at %s", key, datetime.now(timezone.utc).isoformat())
                 try:
                     visit(page, url, fixture_page=True)
+                    fixtures = extract_fixtures(page, key)
+                    observed_at = datetime.now(timezone.utc)
                     leagues[key] = {
-                        "fixtures": extract_fixtures(page, key),
+                        "fixtures": fixtures,
                         "status": "ok",
-                        "fetched_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+                        "fetched_at": observed_at.isoformat().replace("+00:00", "Z"),
+                        "clock_check": check_live_clock(fixtures, observed_at),
                     }
                 except Exception as exc:
                     leagues[key] = {"status": "error", "error": str(exc)}

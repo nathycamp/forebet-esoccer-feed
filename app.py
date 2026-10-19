@@ -114,6 +114,7 @@ def predictions():
         leagues = {}
         league_fetched_at = {}
         league_changed_at = {}
+        league_clock_checks = {}
         now = datetime.now(timezone.utc)
         too_old = False
         for key in LEAGUES:
@@ -122,6 +123,9 @@ def predictions():
             fetched_at = saved.get("fetched_at") if saved else None
             league_fetched_at[key] = fetched_at
             league_changed_at[key] = saved.get("changed_at") if saved else None
+            league_clock_checks[key] = saved.get("clock_check") if saved else None
+            if league_clock_checks[key] and league_clock_checks[key].get("status") == "mismatch":
+                too_old = True
             if not fetched_at or (now - datetime.fromisoformat(fetched_at.replace("Z", "+00:00"))).total_seconds() > MAX_CACHE_AGE_SECONDS:
                 too_old = True
         return jsonify({
@@ -130,6 +134,7 @@ def predictions():
             "stale": cache["stale"] or too_old,
             "league_fetched_at": league_fetched_at,
             "league_changed_at": league_changed_at,
+            "league_clock_checks": league_clock_checks,
             "leagues": leagues,
         })
 

@@ -2,3 +2,7 @@
 .venv
 __pycache__
 *.pyc
+prediction_engine
+test_prediction_engine.py
+PREDICTION_ENGINE.md
+PREDICTION_EVALUATION.md
