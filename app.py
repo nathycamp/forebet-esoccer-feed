@@ -4,18 +4,20 @@ import logging
 import gzip
 import hashlib
 import json
+import math
 import os
 import signal
 import subprocess
 import sys
 import threading
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from apscheduler.schedulers.background import BackgroundScheduler
 from flask import Flask, Response, jsonify, request
 
+from prediction_engine import MODEL_VERSION, predict_feed
 from reader import LEAGUES
 
 
@@ -40,10 +42,21 @@ FIXTURE_FIELDS = {
     "pred", "correct_score", "avg_goals", "status", "actual_score",
     "live_score", "match_clock",
 }
+PICK_FIELDS = {
+    "home_tag", "away_tag", "home_club", "away_club", "kickoff_utc",
+    "goals_line", "goals_call", "goals_probability", "expected_goals",
+    "goals_confidence", "favourite", "favourite_probability",
+    "favourite_strength", "call_status", "warnings",
+}
+# Replays of the feed's own results showed a goals edge at the league line only here.
+TRUSTED_GOAL_LEAGUES = {"esb8", "volta6"}
+picks_lock = threading.Lock()
+picks_cache = {"key": None, "result": None}
 
 
-def query_options():
-    unknown = set(request.args) - {"league", "status", "player", "limit", "fields"}
+def query_options(fields_allowed=FIXTURE_FIELDS, with_status=True):
+    allowed = {"league", "player", "limit", "fields"} | ({"status"} if with_status else set())
+    unknown = set(request.args) - allowed
     if unknown:
         raise ValueError("Unknown query parameter: " + ", ".join(sorted(unknown)))
 
@@ -57,7 +70,7 @@ def query_options():
 
     leagues = choices("league", LEAGUES, set(LEAGUES))
     statuses = choices("status", {"live", "upcoming", "played"}, None)
-    fields = choices("fields", FIXTURE_FIELDS, None)
+    fields = choices("fields", fields_allowed, None)
     limit = None
     for name in ("limit", "player"):
         if len(request.args.getlist(name)) > 1:
@@ -172,18 +185,13 @@ def health():
         })
 
 
-@app.get("/predictions")
-def predictions():
-    try:
-        selected, statuses, fields, limit, player = query_options()
-    except ValueError as exc:
-        return jsonify({"error": str(exc)}), 400
+def snapshot(selected, now):
+    """Copy the cached feed for the selected leagues with freshness metadata."""
     with cache_lock:
         leagues = {}
         league_fetched_at = {}
         league_changed_at = {}
         league_clock_checks = {}
-        now = datetime.now(timezone.utc)
         too_old = False
         for key in LEAGUES:
             if key not in selected:
@@ -198,7 +206,7 @@ def predictions():
                 too_old = True
             if not fetched_at or (now - datetime.fromisoformat(fetched_at.replace("Z", "+00:00"))).total_seconds() > MAX_CACHE_AGE_SECONDS:
                 too_old = True
-        payload = {
+        return {
             "fetched_at": cache["fetched_at"],
             "source": "railway-shifter-reader",
             "stale": cache["stale"] or too_old,
@@ -207,6 +215,17 @@ def predictions():
             "league_clock_checks": league_clock_checks,
             "leagues": leagues,
         }
+
+
+@app.get("/predictions")
+def predictions():
+    try:
+        selected, statuses, fields, limit, player = query_options()
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+    now = datetime.now(timezone.utc)
+    payload = snapshot(selected, now)
+    leagues = payload["leagues"]
     # Work on copies after releasing the cache lock so filtering cannot alter
     # the cached full feed or hold up the background refresh.
     for key, rows in leagues.items():
@@ -216,14 +235,128 @@ def predictions():
             rows = [row for row in rows if (statuses is None or row.get("status") in statuses)
                     and not (statuses is not None and row.get("status") == "upcoming"
                              and not is_future_fixture(row, now))
-                    and (player is None or any(" ".join(str(row.get(side, "")).casefold().split()) == player
-                                               for side in ("home_tag", "away_tag")))]
+                    and (player is None or matches_player(row, player))]
             rows.sort(key=lambda row: row.get("kickoff_utc", ""), reverse=statuses == {"played"})
             if limit is not None:
                 rows = rows[:limit]
             if fields is not None:
                 rows = [{name: value for name, value in row.items() if name in fields} for row in rows]
             leagues[key] = rows
+    return feed_response(payload)
+
+
+def matches_player(row, player):
+    return any(" ".join(str(row.get(side, "")).casefold().split()) == player
+               for side in ("home_tag", "away_tag"))
+
+
+def league_goal_line(rows, now):
+    """The league's usual x.5 line from its own recent results in this snapshot."""
+    totals = []
+    for row in rows:
+        try:
+            if row.get("status") == "played" and now - datetime.fromisoformat(row["kickoff_utc"].replace("Z", "+00:00")).astimezone(timezone.utc) <= timedelta(days=30):
+                totals.append(sum(int(goals) for goals in row["actual_score"].split("-")))
+        except (KeyError, ValueError, TypeError, AttributeError):
+            continue
+    return min(8.5, max(1.5, math.floor(sum(totals) / len(totals)) + .5)) if totals else None
+
+
+def outcome_rates(rows):
+    counts = {"1": 1, "X": 1, "2": 1}
+    for row in rows:
+        try:
+            if row.get("status") == "played":
+                home, away = map(int, row["actual_score"].split("-"))
+                counts["1" if home > away else "2" if away > home else "X"] += 1
+        except (KeyError, ValueError, TypeError, AttributeError):
+            continue
+    total = sum(counts.values())
+    return {key: value / total for key, value in counts.items()}
+
+
+def build_picks(feed, now):
+    """Goal calls at each league's usual line, with a weak favourite as context."""
+    forecasts = predict_feed(feed, now=now)
+    leagues = {}
+    for key, rows in feed["leagues"].items():
+        if not isinstance(rows, list):
+            leagues[key] = {"status": "error"}
+            continue
+        diagnostics = forecasts["diagnostics"][key]
+        line = league_goal_line(rows, now)
+        rates = outcome_rates(rows)
+        picks = []
+        for forecast in forecasts["leagues"][key]:
+            # Replays favoured form probabilities pulled halfway to league rates over Forebet's.
+            form = forecast["form_model_probabilities"]
+            winner = {side: .5 * form[side] + .5 * rates[side] for side in rates}
+            favourite = max(winner, key=winner.get)
+            pick = {name: forecast[name] for name in ("home_tag", "away_tag", "home_club", "away_club", "kickoff_utc")}
+            pick.update({"goals_line": line, "goals_call": None, "goals_probability": None,
+                         "expected_goals": forecast["expected_goals"]["total"],
+                         "goals_confidence": "trusted" if key in TRUSTED_GOAL_LEAGUES else "low",
+                         "favourite": {"1": forecast["home_tag"], "2": forecast["away_tag"], "X": "draw"}[favourite],
+                         "favourite_probability": round(winner[favourite], 4),
+                         "favourite_strength": "weak", "call_status": "ok",
+                         "warnings": forecast["warnings"]})
+            if diagnostics["stale"]:
+                pick.update({"call_status": "withheld: stale source", "favourite": None, "favourite_probability": None})
+            elif line is None:
+                pick["call_status"] = "withheld: no league results"
+            else:
+                over = forecast["totals"][str(line)]["over"]
+                pick.update({"goals_call": "over" if over >= .5 else "under",
+                             "goals_probability": round(max(over, 1 - over), 4)})
+            picks.append(pick)
+        leagues[key] = picks
+    return {"generated_at": forecasts["generated_at"], "source_fetched_at": feed["fetched_at"],
+            "stale": forecasts["stale"], "model_version": MODEL_VERSION,
+            "validation_status": "experimental_uncalibrated",
+            "goals_line_basis": "league mean of this snapshot's results, rounded down to x.5",
+            "league_fetched_at": feed["league_fetched_at"], "leagues": leagues}
+
+
+def current_picks(now):
+    """Compute picks once per feed refresh; requests only filter the result."""
+    feed = snapshot(set(LEAGUES), now)
+    key = json.dumps([feed["fetched_at"], feed["league_fetched_at"], feed["stale"]])
+    with picks_lock:
+        if picks_cache["key"] != key:
+            picks_cache["result"] = build_picks(feed, now)
+            picks_cache["key"] = key
+        return json.loads(json.dumps(picks_cache["result"]))
+
+
+@app.get("/picks")
+def picks():
+    try:
+        selected, _, fields, limit, player = query_options(PICK_FIELDS, with_status=False)
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+    now = datetime.now(timezone.utc)
+    try:
+        payload = current_picks(now)
+    except Exception:
+        logger.exception("Could not build picks")
+        return jsonify({"error": "picks unavailable"}), 503
+    payload["league_fetched_at"] = {key: value for key, value in payload["league_fetched_at"].items() if key in selected}
+    leagues = {}
+    for key in LEAGUES:
+        if key not in selected:
+            continue
+        rows = payload["leagues"].get(key, {"status": "error"})
+        if isinstance(rows, list):
+            # Kickoffs that elapse between refreshes are no longer upcoming.
+            rows = [row for row in rows if is_future_fixture(row, now)
+                    and (player is None or matches_player(row, player))]
+            rows.sort(key=lambda row: row["kickoff_utc"])
+            if limit is not None:
+                rows = rows[:limit]
+            if fields is not None:
+                rows = [{name: value for name, value in row.items() if name in fields} for row in rows]
+        leagues[key] = rows
+    payload["leagues"] = leagues
     return feed_response(payload)
 
 

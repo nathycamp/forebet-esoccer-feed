@@ -51,6 +51,32 @@ indicator, including failed reads and clock inconsistencies; filters do not
 hide reader problems. The documented kickoff correction is already applied
 in `kickoff_utc`; do not apply it again downstream.
 
+## Picks
+
+`GET /picks` returns goal calls for upcoming fixtures, computed once per feed
+refresh from the same memory cache. It stores nothing and never fetches
+Forebet. It accepts `league`, `player`, `limit` and `fields` exactly as above
+(there is no `status`; every pick is upcoming), and uses the same compact JSON,
+gzip and ETag behavior.
+
+| Field | Meaning |
+|---|---|
+| `goals_line` | The league's usual line: mean total goals of this snapshot's results, rounded down to x.5 |
+| `goals_call`, `goals_probability` | `over` or `under` that line, and the model's probability for that side |
+| `expected_goals` | Model's expected total goals |
+| `goals_confidence` | `trusted` for esb8 and volta6, where replays showed an edge; `low` otherwise |
+| `favourite`, `favourite_probability` | Home tag, away tag or `draw`, from form probabilities pulled halfway to league outcome rates |
+| `favourite_strength` | Always `weak`: winner forecasts did not beat league outcome rates in replays |
+| `call_status` | `ok`, or why calls are withheld (`withheld: stale source`, `withheld: no league results`) |
+| `warnings` | Model warnings, such as limited player history |
+
+```text
+/picks?league=esb8,volta6&limit=3
+/picks?player=Mani&fields=home_tag,away_tag,kickoff_utc,goals_line,goals_call,goals_probability,favourite
+```
+
+Calls are experimental and uncalibrated, not betting advice.
+
 ## Transfer size and conditional polling
 
 Responses use compact UTF-8 JSON. Send `Accept-Encoding: gzip` to compress

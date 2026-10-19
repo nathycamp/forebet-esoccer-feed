@@ -3,7 +3,8 @@
 This is a stateless Python 3.11 package. Give it the `/predictions` JSON your
 consumer already downloaded. It computes forecasts in memory and returns JSON.
 It does not open a browser, contact Forebet or Railway, save history, write a
-database, install dependencies, or run background jobs. The package is excluded from the Railway reader Docker build. Reader timestamp
+database, install dependencies, or run background jobs. The Railway service also
+uses it to serve `/picks` (see `API.md`). Reader timestamp
 normalization is configured separately as described below.
 
 ## Use the existing downloaded feed
@@ -26,8 +27,8 @@ python3 -m prediction_engine < downloaded-feed.json
 Copy the `prediction_engine/` directory to the downstream Python project. Run
 the function once for each new snapshot, rather than once for each user request.
 The only computational cost is on the machine calling this function. There is no
-additional scraping or feed polling. It intentionally does not add an HTTP
-endpoint to the Railway reader.
+additional scraping or feed polling. The Railway service's `/picks` endpoint
+runs it once per feed refresh on the in-memory cache and stores nothing.
 
 The `--as-of` option is for reproducible offline analysis of an old snapshot.
 Omit it in production so expired kickoffs and stale feeds are detected using

@@ -118,5 +118,79 @@ class QueryTests(unittest.TestCase):
         self.assertTrue(all(rows == [] for rows in result['leagues'].values()))
 
 
+
+class PicksTests(unittest.TestCase):
+    def setUp(self):
+        self.now = datetime.now(timezone.utc)
+        self.stamp = self.now.isoformat()
+        def row(minute, status='played', home='Alice', away='Bob', score='4-1'):
+            return {'home_tag': home, 'away_tag': away, 'home_club': 'Arsenal', 'away_club': 'Chelsea',
+                    'kickoff_utc': (self.now+timedelta(minutes=minute)).isoformat(), 'status': status,
+                    'actual_score': score if status == 'played' else None, 'p1': 45, 'px': 25, 'p2': 30}
+        self.rows = [row(-20*(index+1)) for index in range(40)]
+        self.rows += [row(10, 'upcoming'), row(30, 'upcoming', 'Carol', 'Dave'), row(-60, 'upcoming', 'Late', 'Row')]
+        with app.cache_lock:
+            app.cache.update({'fetched_at': self.stamp, 'stale': False, 'leagues': {
+                key: {'fixtures': copy.deepcopy(self.rows), 'fetched_at': self.stamp,
+                      'changed_at': self.stamp, 'status': 'ok'} for key in app.LEAGUES}})
+        with app.picks_lock:
+            app.picks_cache.update({'key': None, 'result': None})
+        self.client = app.app.test_client()
+
+    def test_goal_calls_use_league_line_and_label_confidence(self):
+        with patch.object(app, 'run_reader', side_effect=AssertionError('request triggered a scrape')):
+            result = self.client.get('/picks').get_json()
+        self.assertFalse(result['stale'])
+        esb8, gt12 = result['leagues']['esb8'], result['leagues']['gt12']
+        self.assertEqual([pick['home_tag'] for pick in esb8], ['Alice', 'Carol'])
+        alice = esb8[0]
+        self.assertEqual(alice['goals_line'], 5.5)
+        self.assertIn(alice['goals_call'], {'over', 'under'})
+        self.assertGreaterEqual(alice['goals_probability'], .5)
+        self.assertEqual(alice['goals_confidence'], 'trusted')
+        self.assertEqual(gt12[0]['goals_confidence'], 'low')
+        self.assertEqual(alice['favourite'], 'Alice')
+        self.assertEqual(alice['favourite_strength'], 'weak')
+        self.assertEqual(alice['call_status'], 'ok')
+
+    def test_picks_accept_the_same_filters(self):
+        result = self.client.get('/picks?league=volta6,esb8&player=carol&fields=home_tag,goals_call').get_json()
+        self.assertEqual(set(result['leagues']), {'esb8', 'volta6'})
+        self.assertEqual(set(result['league_fetched_at']), {'esb8', 'volta6'})
+        self.assertEqual(set(result['leagues']['esb8'][0]), {'home_tag', 'goals_call'})
+        self.assertEqual(result['leagues']['esb8'][0]['home_tag'], 'Carol')
+        result = self.client.get('/picks?limit=1').get_json()
+        self.assertTrue(all([pick['home_tag'] for pick in rows] == ['Alice'] for rows in result['leagues'].values()))
+        for query in ('status=upcoming', 'fields=p1', 'league=unknown', 'limit=0', 'typo=1'):
+            with self.subTest(query=query):
+                self.assertEqual(self.client.get('/picks?'+query).status_code, 400)
+
+    def test_stale_source_withholds_calls(self):
+        with patch.object(app, 'datetime', wraps=datetime) as dt:
+            dt.now.return_value = self.now+timedelta(minutes=7)
+            result = self.client.get('/picks?league=esb8').get_json()
+        self.assertTrue(result['stale'])
+        pick = result['leagues']['esb8'][0]
+        self.assertIsNone(pick['goals_call'])
+        self.assertIsNone(pick['favourite'])
+        self.assertEqual(pick['call_status'], 'withheld: stale source')
+
+    def test_picks_are_computed_once_per_refresh(self):
+        with patch.object(app, 'predict_feed', wraps=app.predict_feed) as engine:
+            self.client.get('/picks')
+            self.client.get('/picks?league=esb8')
+            self.assertEqual(engine.call_count, 1)
+            with app.cache_lock:
+                app.cache['fetched_at'] = app.cache['leagues']['esb8']['fetched_at'] = (self.now+timedelta(seconds=1)).isoformat()
+            self.client.get('/picks')
+            self.assertEqual(engine.call_count, 2)
+
+    def test_unavailable_league_is_preserved(self):
+        del app.cache['leagues']['esb8']
+        result = self.client.get('/picks?league=esb8,gt12').get_json()
+        self.assertEqual(result['leagues']['esb8'], {'status': 'error'})
+        self.assertTrue(result['stale'])
+        self.assertEqual(len(result['leagues']['gt12']), 2)
+
 if __name__ == '__main__':
     unittest.main()
