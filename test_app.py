@@ -74,6 +74,22 @@ class ReaderServiceTests(unittest.TestCase):
         self.assertEqual(data["leagues"]["esb8"][0]["home_tag"], "old")
         self.assertEqual(data["leagues"]["h2hgg"], {"status": "error"})
 
+    def test_full_refresh_failure_rotates_proxy_session(self):
+        previous_session = app.proxy_session_id
+        with patch.object(app, "run_reader", return_value={
+            key: {"status": "error"} for key in app.LEAGUES
+        }):
+            app.refresh_pages()
+        self.assertNotEqual(app.proxy_session_id, previous_session)
+
+    def test_reader_subprocess_receives_session_id(self):
+        process = MagicMock()
+        process.returncode = 0
+        process.communicate.return_value = (b"{}", None)
+        with patch.object(app.subprocess, "Popen", return_value=process) as popen:
+            self.assertEqual(app.run_reader(), {})
+        self.assertEqual(popen.call_args.kwargs["env"]["SHIFTER_SESSION_ID"], app.proxy_session_id)
+
     def test_parses_fixture_fields_from_dom(self):
         page = MagicMock()
         page.evaluate.return_value = [{

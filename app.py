@@ -7,6 +7,7 @@ import signal
 import subprocess
 import sys
 import threading
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -29,6 +30,7 @@ cache = {
 }
 MAX_CACHE_AGE_SECONDS = 6 * 60
 READER_TIMEOUT_SECONDS = 100
+proxy_session_id = uuid.uuid4().hex[:12]
 
 
 def now_utc():
@@ -37,10 +39,13 @@ def now_utc():
 
 def run_reader():
     """Isolate Chrome so a stuck read cannot block future scheduled jobs."""
+    environment = os.environ.copy()
+    environment["SHIFTER_SESSION_ID"] = proxy_session_id
     process = subprocess.Popen(
         [sys.executable, "-u", str(Path(__file__).with_name("reader.py"))],
         stdout=subprocess.PIPE,
         start_new_session=True,
+        env=environment,
     )
     try:
         output, _ = process.communicate(timeout=READER_TIMEOUT_SECONDS)
@@ -57,6 +62,7 @@ def run_reader():
 
 
 def refresh_pages():
+    global proxy_session_id
     attempted_at = now_utc()
     try:
         results = run_reader()
@@ -79,8 +85,13 @@ def refresh_pages():
             cache["last_status"] = "ok" if complete else "error"
             cache["stale"] = not complete
         logger.info("Reader cycle: %d/%d leagues read", len(successful), len(LEAGUES))
+        if not successful:
+            proxy_session_id = uuid.uuid4().hex[:12]
+            logger.warning("No leagues read; rotating Shifter session for next cycle")
     except Exception:
         logger.exception("Reader cycle failed")
+        proxy_session_id = uuid.uuid4().hex[:12]
+        logger.warning("Rotating Shifter session after reader failure")
         with cache_lock:
             cache["last_fetch"] = attempted_at
             cache["last_status"] = "error"

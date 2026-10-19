@@ -190,9 +190,13 @@ def visit(page, url, fixture_page=False):
 
 def read_pages():
     """Return each league's parsed fixtures, or an error status."""
+    username = os.environ["SHIFTER_USER"]
+    session_id = os.environ.get("SHIFTER_SESSION_ID")
+    if session_id and "-sid-" not in username:
+        username = f"{username}-sid-{session_id}-ttl-600"
     proxy = {
         "server": f"http://{os.environ['SHIFTER_HOST']}:{os.environ['SHIFTER_PORT']}",
-        "username": os.environ["SHIFTER_USER"],
+        "username": username,
         "password": os.environ["SHIFTER_PASS"],
     }
     leagues = {}
