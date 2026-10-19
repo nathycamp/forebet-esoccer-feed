@@ -53,6 +53,8 @@ TRUSTED_GOAL_LEAGUES = {"esb8", "volta6"}
 # Near-even calls and players new to the feed carry no real model opinion.
 MIN_CALL_PROBABILITY = .55
 MIN_PLAYER_GAMES = 5
+# Form changes between sessions, so only imminent games get picks.
+PICK_WINDOW_MINUTES = 20
 picks_lock = threading.Lock()
 picks_cache = {"key": None, "result": None}
 
@@ -280,7 +282,7 @@ def outcome_rates(rows):
 
 def build_picks(feed, now):
     """Goal calls at each league's usual line, with a weak favourite as context."""
-    forecasts = predict_feed(feed, now=now)
+    forecasts = predict_feed(feed, now=now, use_live_scores=True)
     leagues = {}
     for key, rows in feed["leagues"].items():
         if not isinstance(rows, list):
@@ -358,9 +360,12 @@ def picks():
         rows = payload["leagues"].get(key, {"status": "error"})
         if isinstance(rows, list):
             # Kickoffs that elapse between refreshes are no longer upcoming.
-            rows = [row for row in rows if is_future_fixture(row, now)
+            rows = sorted((row for row in rows if is_future_fixture(row, now)), key=lambda row: row["kickoff_utc"])
+            # The next kickoff, and anything else starting within the window.
+            horizon = now + timedelta(minutes=PICK_WINDOW_MINUTES)
+            rows = [row for row in rows if (row["kickoff_utc"] == rows[0]["kickoff_utc"]
+                                            or not is_future_fixture(row, horizon))
                     and (player is None or matches_player(row, player))]
-            rows.sort(key=lambda row: row["kickoff_utc"])
             if limit is not None:
                 rows = rows[:limit]
             if fields is not None:

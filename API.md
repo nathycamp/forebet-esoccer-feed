@@ -53,8 +53,11 @@ in `kickoff_utc`; do not apply it again downstream.
 
 ## Picks
 
-`GET /picks` returns goal calls for upcoming fixtures, computed once per feed
-refresh from the same memory cache. It stores nothing and never fetches
+`GET /picks` returns goal calls for each league's next kickoff and any other
+fixture starting within 20 minutes, computed once per feed refresh from the
+same memory cache. Games in progress count as partial evidence for their
+players' next fixtures: the score so far over the share of the match played
+(warning `live_score_evidence_used`). It stores nothing and never fetches
 Forebet. It accepts `league`, `player`, `limit` and `fields` exactly as above
 (there is no `status`; every pick is upcoming), and uses the same compact JSON,
 gzip and ETag behavior.

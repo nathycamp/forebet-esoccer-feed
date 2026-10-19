@@ -2,15 +2,17 @@
 
 from datetime import datetime, timedelta, timezone
 
-from .model import MODEL_VERSION, LeagueModel
+from .model import MODEL_VERSION, LeagueModel, tag
 from .validation import LEAGUES, clean_rows, utc
 
 
-def predict_feed(feed, *, now=None, use_common_opponents=False):
+def predict_feed(feed, *, now=None, use_common_opponents=False, use_live_scores=False):
     """Return winner, total-goal and score probabilities; no I/O or retained state.
 
     ``now`` is injectable for reproducible snapshot analysis. Production callers
     should omit it so elapsed kickoffs and old snapshots are rejected correctly.
+    ``use_live_scores`` adds games in progress as partial evidence for the
+    players' next fixtures (score so far over the share of the match played).
     """
     if not isinstance(feed, dict) or not isinstance(feed.get("leagues"), dict):
         raise ValueError("feed must contain a leagues object")
@@ -41,7 +43,8 @@ def predict_feed(feed, *, now=None, use_common_opponents=False):
         future_results = sum(row["status"] == "played" and utc(row["kickoff_utc"]) >= now for row in rows)
         pending = [row for row in rows if row["status"] == "upcoming" and utc(row["kickoff_utc"]) <= now]
         upcoming = [row for row in rows if row["status"] == "upcoming" and utc(row["kickoff_utc"]) > now]
-        model = LeagueModel(completed, now)
+        live = live_evidence(rows, now, LEAGUES[league]) if use_live_scores and not stale else []
+        model = LeagueModel(completed, now, live)
         forecasts = []
         for row in upcoming:
             forecast = model.predict(row, use_common_opponents=use_common_opponents)
@@ -55,6 +58,8 @@ def predict_feed(feed, *, now=None, use_common_opponents=False):
                 forecast["warnings"].append("no_league_results_goals_use_generic_prior")
             if future_results:
                 forecast["warnings"].append("future_dated_results_excluded")
+            if {tag(row["home_tag"]), tag(row["away_tag"])} & model.live_players:
+                forecast["warnings"].append("live_score_evidence_used")
             forecasts.append(forecast)
         output["leagues"][league] = forecasts
         output["diagnostics"][league] = {"completed_games_used": len(completed),
@@ -63,6 +68,19 @@ def predict_feed(feed, *, now=None, use_common_opponents=False):
             "future_dated_results_excluded": future_results,
             "source_age_seconds": round(source_age, 1) if source_age is not None else None,
             "rejected_rows": len(errors), "errors": errors[:10]}
-        output["diagnostics"][league]["live_games_excluded"] = sum(row["status"] == "live" for row in rows)
+        output["diagnostics"][league]["live_games_excluded"] = sum(row["status"] == "live" for row in rows) - len(live)
+        output["diagnostics"][league]["live_games_used"] = len(live)
         output["stale"] |= stale
     return output
+
+
+def live_evidence(rows, now, duration):
+    """Games in progress with a readable score and clock, and the share played."""
+    live = []
+    for row in rows:
+        clock = str(row.get("match_clock") or "").strip().rstrip("'′")
+        if (row["status"] != "live" or not row.get("live_score") or not clock.isdigit()
+                or int(clock) < 1 or utc(row["kickoff_utc"]) >= now):
+            continue
+        live.append((row, min(int(clock), duration) / duration))
+    return live

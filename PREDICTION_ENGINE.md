@@ -28,7 +28,9 @@ Copy the `prediction_engine/` directory to the downstream Python project. Run
 the function once for each new snapshot, rather than once for each user request.
 The only computational cost is on the machine calling this function. There is no
 additional scraping or feed polling. The Railway service's `/picks` endpoint
-runs it once per feed refresh on the in-memory cache and stores nothing.
+runs it once per feed refresh on the in-memory cache and stores nothing, with
+`use_live_scores=True`: a game in progress contributes its score so far over
+the share of the match played to the goal fit, never to Elo or form records.
 
 The `--as-of` option is for reproducible offline analysis of an old snapshot.
 Omit it in production so expired kickoffs and stale feeds are detected using

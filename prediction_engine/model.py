@@ -78,7 +78,8 @@ def shared_pace_matrix(home_mean, away_mean, dispersion):
 
 
 class LeagueModel:
-    def __init__(self, rows, as_of):
+    def __init__(self, rows, as_of, live=()):
+        """``live`` holds (row, fraction played) for games in progress at ``as_of``."""
         self.as_of = as_of
         self.rows = sorted((row for row in rows if row.get("status") == "played"
                             and row.get("actual_score") and utc(row["kickoff_utc"]) < as_of
@@ -125,13 +126,31 @@ class LeagueModel:
                 weight = .5 ** (index / 10 + days / 7)
                 observations.append(dict(game, player=player, weight=weight))
                 self.effective[player] += weight
-        total_weight = sum(game["weight"] for game in observations)
+        # A game in progress is evidence over the share of the match played so
+        # far: its goals count in full against a proportionally smaller exposure.
+        # Its result is unknown, so it never enters Elo or win/draw/loss records.
+        self.live_players = set()
+        for row, fraction in live:
+            home, away = tag(row["home_tag"]), tag(row["away_tag"])
+            hg, ag = map(int, row["live_score"].split("-"))
+            kickoff = utc(row["kickoff_utc"])
+            weight = .5 ** ((as_of - kickoff).total_seconds() / 86400 / 7)
+            for player, opponent, gf, club, opponent_club, side in (
+                (home, away, hg, row["home_club"], row["away_club"], "home"),
+                (away, home, ag, row["away_club"], row["home_club"], "away"),
+            ):
+                observations.append({"player": player, "opponent": opponent, "goals_for": gf,
+                    "club": tag(club), "opponent_club": tag(opponent_club), "side": side,
+                    "kickoff": kickoff, "weight": weight, "exposure": fraction})
+                self.effective[player] += weight * fraction
+                self.live_players.add(player)
+        total_weight = sum(game["weight"] * game.get("exposure", 1.) for game in observations)
         league_mean = sum(g["weight"] * g["goals_for"] for g in observations) / total_weight if total_weight else 2.5
         self.baseline = {}
         for side in ("home", "away"):
             subset = [game for game in observations if game["side"] == side]
             self.baseline[side] = max(.2, (20 * league_mean + sum(g["weight"] * g["goals_for"] for g in subset))
-                                      / (20 + sum(g["weight"] for g in subset)))
+                                      / (20 + sum(g["weight"] * g.get("exposure", 1.) for g in subset)))
         # Regularized multiplicative Poisson fit: opponent defense and club are
         # included in the exposure when estimating each player's attack.
         dimensions = (("player", self.attack, 12.), ("opponent", self.defense, 12.),
@@ -146,12 +165,14 @@ class LeagueModel:
                         goals[key] = exposure[key] = prior_exposure
                     base = self.rate(game) / parameters[key]
                     goals[key] += game["weight"] * game["goals_for"]
-                    exposure[key] += game["weight"] * base
+                    exposure[key] += game["weight"] * base * game.get("exposure", 1.)
                 for key in goals:
                     estimate = goals[key] / max(exposure[key], .01)
                     parameters[key] = clamp(math.sqrt(parameters[key] * estimate), .35, 2.8)
         numerator = denominator = 0.
         for game in observations:
+            if "exposure" in game:
+                continue
             mean = self.rate(game)
             numerator += game["weight"] * ((game["goals_for"] - mean) ** 2 - mean)
             denominator += game["weight"] * mean ** 2

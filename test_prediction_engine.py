@@ -274,6 +274,19 @@ class PredictionTests(unittest.TestCase):
         self.assertIsNone(result["leagues"]["gt12"][0]["pick"])
         self.assertTrue(result["diagnostics"]["gt12"]["stale"])
 
+    def test_live_score_is_partial_goal_evidence_only(self):
+        live = fixture(kickoff_utc=(NOW-timedelta(minutes=4)).isoformat(), status="live",
+                       actual_score=None, live_score="6-5", match_clock="4")
+        quiet = predict_feed(snapshot(self.played+[self.future, live]), now=NOW)
+        busy = predict_feed(snapshot(self.played+[self.future, live]), now=NOW, use_live_scores=True)
+        before, after = quiet["leagues"]["esb8"][0], busy["leagues"]["esb8"][0]
+        self.assertGreater(after["expected_goals"]["total"], before["expected_goals"]["total"])
+        self.assertEqual(after["evidence"]["home"]["elo"], before["evidence"]["home"]["elo"])
+        self.assertEqual(after["evidence"]["home"]["windows"], before["evidence"]["home"]["windows"])
+        self.assertIn("live_score_evidence_used", after["warnings"])
+        self.assertEqual(busy["diagnostics"]["esb8"]["live_games_used"], 1)
+        self.assertEqual(quiet["diagnostics"]["esb8"]["live_games_excluded"], 1)
+
     def test_one_league_clock_mismatch_leaves_other_leagues_fresh(self):
         feed = snapshot(self.played+[self.future])
         feed["stale"] = True

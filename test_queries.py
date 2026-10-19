@@ -128,7 +128,8 @@ class PicksTests(unittest.TestCase):
                     'kickoff_utc': (self.now+timedelta(minutes=minute)).isoformat(), 'status': status,
                     'actual_score': score if status == 'played' else None, 'p1': 45, 'px': 25, 'p2': 30}
         self.rows = [row(-20*(index+1)) for index in range(40)]
-        self.rows += [row(10, 'upcoming'), row(30, 'upcoming', 'Carol', 'Dave'), row(-60, 'upcoming', 'Late', 'Row')]
+        self.rows += [row(10, 'upcoming'), row(15, 'upcoming', 'Carol', 'Dave'), row(-60, 'upcoming', 'Late', 'Row'),
+                      row(45, 'upcoming', 'Far', 'Ahead')]
         with app.cache_lock:
             app.cache.update({'fetched_at': self.stamp, 'stale': False, 'leagues': {
                 key: {'fixtures': copy.deepcopy(self.rows), 'fetched_at': self.stamp,
@@ -155,6 +156,33 @@ class PicksTests(unittest.TestCase):
         carol = esb8[1]
         self.assertIsNone(carol['goals_call'])
         self.assertEqual(carol['call_status'], 'no call: new players')
+
+    def test_only_next_kickoff_or_twenty_minute_window(self):
+        result = self.client.get('/picks?league=esb8').get_json()
+        self.assertEqual([pick['home_tag'] for pick in result['leagues']['esb8']], ['Alice', 'Carol'])
+        with patch.object(app, 'datetime', wraps=datetime) as dt:
+            dt.now.return_value = self.now+timedelta(minutes=16)
+            with app.cache_lock:
+                app.cache['fetched_at'] = (self.now+timedelta(minutes=16)).isoformat()
+                for saved in app.cache['leagues'].values():
+                    saved['fetched_at'] = app.cache['fetched_at']
+            result = self.client.get('/picks?league=esb8').get_json()
+        # Nothing else within 20 minutes, so the next kickoff is still shown.
+        self.assertEqual([pick['home_tag'] for pick in result['leagues']['esb8']], ['Far'])
+
+    def test_live_game_score_updates_the_next_pick(self):
+        quiet = self.client.get('/picks?league=esb8').get_json()['leagues']['esb8'][0]
+        live = {'home_tag': 'Alice', 'away_tag': 'Bob', 'home_club': 'Arsenal', 'away_club': 'Chelsea',
+                'kickoff_utc': (self.now-timedelta(minutes=4)).isoformat(), 'status': 'live',
+                'live_score': '6-5', 'match_clock': '4', 'actual_score': None, 'p1': 45, 'px': 25, 'p2': 30}
+        with app.cache_lock:
+            for saved in app.cache['leagues'].values():
+                saved['fixtures'].append(dict(live))
+                saved['fetched_at'] = app.cache['fetched_at'] = (self.now+timedelta(seconds=1)).isoformat()
+        busy = self.client.get('/picks?league=esb8').get_json()['leagues']['esb8'][0]
+        self.assertGreater(busy['expected_goals'], quiet['expected_goals'])
+        self.assertIn('live_score_evidence_used', busy['warnings'])
+        self.assertNotIn('live_score_evidence_used', quiet['warnings'])
 
     def test_near_even_calls_are_not_made(self):
         with patch.object(app, 'MIN_CALL_PROBABILITY', 1.):
