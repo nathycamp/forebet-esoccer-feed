@@ -47,7 +47,7 @@ PICK_FIELDS = {
     "goals_line", "goals_call", "goals_probability", "expected_goals",
     "goals_confidence", "favourite", "favourite_probability",
     "favourite_strength", "call_status", "warnings",
-    "one_x_two", "double_chance", "winner_markets_trust",
+    "one_x_two", "double_chance", "winner_markets_trust", "safest_option",
 }
 # Replays of the feed's own results showed a goals edge at the league line only here.
 TRUSTED_GOAL_LEAGUES = {"esb8", "volta6"}
@@ -58,7 +58,8 @@ MIN_PLAYER_GAMES = 5
 PICK_WINDOW_MINUTES = 20
 # Replays: over/under at the league line beat league rates in esb8 and volta6
 # (73% landed at 60%+), while model 1X2 and double-chance picks did worse than
-# simply taking the league's most common result. Only goals calls can be top picks.
+# simply taking the league's most common result. Top picks rank the likeliest
+# option in any market, and proven_edge says which of them had an edge.
 TOP_PICK_MIN_PROBABILITY = .60
 TOP_PICKS = 2
 picks_lock = threading.Lock()
@@ -262,7 +263,7 @@ def matches_player(row, player):
 
 
 def league_goal_line(rows, now):
-    """The league's usual x.5 line from its own recent results in this snapshot."""
+    """The league's usual x.5 line from this snapshot's results, and how often it went over."""
     totals = []
     for row in rows:
         try:
@@ -270,7 +271,10 @@ def league_goal_line(rows, now):
                 totals.append(sum(int(goals) for goals in row["actual_score"].split("-")))
         except (KeyError, ValueError, TypeError, AttributeError):
             continue
-    return min(8.5, max(1.5, math.floor(sum(totals) / len(totals)) + .5)) if totals else None
+    if not totals:
+        return None, None
+    line = min(8.5, max(1.5, math.floor(sum(totals) / len(totals)) + .5))
+    return line, sum(total > line for total in totals) / len(totals)
 
 
 def outcome_rates(rows):
@@ -286,6 +290,25 @@ def outcome_rates(rows):
     return {key: value / total for key, value in counts.items()}
 
 
+def safest_option(pick, winner, rates, over, over_rate, league):
+    """The likeliest selection across 1X2, double chance and the league goals line."""
+    home, away = pick["home_tag"], pick["away_tag"]
+    side = "over" if over >= .5 else "under"
+    options = [("1x2", f"1 ({home} win)", winner["1"], rates["1"]),
+               ("1x2", "X (draw)", winner["X"], rates["X"]),
+               ("1x2", f"2 ({away} win)", winner["2"], rates["2"]),
+               ("double_chance", f"1X ({home} or draw)", winner["1"] + winner["X"], rates["1"] + rates["X"]),
+               ("double_chance", f"X2 ({away} or draw)", winner["X"] + winner["2"], rates["X"] + rates["2"]),
+               ("double_chance", "12 (no draw)", winner["1"] + winner["2"], rates["1"] + rates["2"]),
+               ("over_under", f"{side} {pick['goals_line']}", max(over, 1 - over),
+                over_rate if side == "over" else 1 - over_rate)]
+    market, selection, probability, league_rate = max(options, key=lambda option: option[2])
+    return {"market": market, "selection": selection, "probability": round(probability, 4),
+            "league_rate": round(league_rate, 4),
+            "proven_edge": market == "over_under" and league in TRUSTED_GOAL_LEAGUES
+                           and pick["goals_call"] is not None}
+
+
 def build_picks(feed, now):
     """Goal calls at each league's usual line, with a weak favourite as context."""
     forecasts = predict_feed(feed, now=now, use_live_scores=True)
@@ -295,7 +318,7 @@ def build_picks(feed, now):
             leagues[key] = {"status": "error"}
             continue
         diagnostics = forecasts["diagnostics"][key]
-        line = league_goal_line(rows, now)
+        line, over_rate = league_goal_line(rows, now)
         rates = outcome_rates(rows)
         picks = []
         for forecast in forecasts["leagues"][key]:
@@ -315,7 +338,8 @@ def build_picks(feed, now):
                          "double_chance": {"1X": round(winner["1"] + winner["X"], 4),
                                            "X2": round(winner["X"] + winner["2"], 4),
                                            "12": round(winner["1"] + winner["2"], 4)},
-                         "winner_markets_trust": "not trusted: did not beat league rates in replays"})
+                         "winner_markets_trust": "not trusted: did not beat league rates in replays",
+                         "safest_option": None})
             if diagnostics["stale"]:
                 pick.update({"call_status": "withheld: stale source", "favourite": None, "favourite_probability": None,
                              "one_x_two": None, "double_chance": None})
@@ -332,6 +356,8 @@ def build_picks(feed, now):
                     pick["call_status"] = "no call: too close"
                 else:
                     pick["goals_call"] = "over" if over >= .5 else "under"
+                if history >= MIN_PLAYER_GAMES:
+                    pick["safest_option"] = safest_option(pick, winner, rates, over, over_rate, key)
             picks.append(pick)
         leagues[key] = picks
     return {"generated_at": forecasts["generated_at"], "source_fetched_at": feed["fetched_at"],
@@ -385,20 +411,19 @@ def picks():
             rows = [row for row in rows if (row["kickoff_utc"] == rows[0]["kickoff_utc"]
                                             or not is_future_fixture(row, horizon))
                     and (player is None or matches_player(row, player))]
-            if key in TRUSTED_GOAL_LEAGUES:
-                candidates += [dict(row, league=key, grade="strong" if row["goals_probability"] >= TOP_PICK_MIN_PROBABILITY
-                                    else "standard") for row in rows if row["goals_call"]
-                               and (top_count or row["goals_probability"] >= TOP_PICK_MIN_PROBABILITY)]
+            candidates += [dict(row, league=key, **row["safest_option"]) for row in rows if row["safest_option"]
+                           and (top_count or row["safest_option"]["probability"] >= TOP_PICK_MIN_PROBABILITY)]
             if limit is not None:
                 rows = rows[:limit]
             if fields is not None:
                 rows = [{name: value for name, value in row.items() if name in fields} for row in rows]
         leagues[key] = rows
     payload["leagues"] = leagues
-    # ?top=N ranks every trusted goals call; by default only strong ones qualify.
-    top = sorted(candidates, key=lambda row: row["goals_probability"], reverse=True)[:top_count or TOP_PICKS]
-    if fields is not None:
-        top = [{name: value for name, value in row.items() if name in fields or name in ("league", "grade")} for row in top]
+    # ?top=N ranks every eligible game; by default only options at 60%+ qualify.
+    top = sorted(candidates, key=lambda row: row["probability"], reverse=True)[:top_count or TOP_PICKS]
+    top_keys = {"league", "market", "selection", "probability", "league_rate", "proven_edge"}
+    top = [{name: value for name, value in row.items() if (name in fields if fields is not None
+            else name not in ("safest_option", "one_x_two", "double_chance")) or name in top_keys} for row in top]
     payload["top_picks"] = top
     payload["top_picks_status"] = "ok" if top else "no top pick right now"
     if top_count:

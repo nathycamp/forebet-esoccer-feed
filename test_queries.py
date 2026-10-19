@@ -184,32 +184,41 @@ class PicksTests(unittest.TestCase):
         self.assertIn('live_score_evidence_used', busy['warnings'])
         self.assertNotIn('live_score_evidence_used', quiet['warnings'])
 
-    def test_top_picks_are_strongest_trusted_goal_calls(self):
-        with patch.object(app, 'TOP_PICK_MIN_PROBABILITY', .5):
-            result = self.client.get('/picks').get_json()
+    def test_top_picks_take_the_likeliest_option_in_any_market(self):
+        result = self.client.get('/picks').get_json()
         top = result['top_picks']
         self.assertEqual(result['top_picks_status'], 'ok')
         self.assertLessEqual(len(top), app.TOP_PICKS)
-        self.assertTrue(all(pick['league'] in app.TRUSTED_GOAL_LEAGUES and pick['goals_call'] for pick in top))
-        self.assertEqual([p['goals_probability'] for p in top], sorted((p['goals_probability'] for p in top), reverse=True))
+        for pick in top:
+            self.assertIn(pick['market'], {'1x2', 'double_chance', 'over_under'})
+            self.assertGreaterEqual(pick['probability'], app.TOP_PICK_MIN_PROBABILITY)
+            self.assertIn('league_rate', pick)
+            self.assertEqual(pick['proven_edge'], pick['market'] == 'over_under'
+                             and pick['league'] in app.TRUSTED_GOAL_LEAGUES)
+        self.assertEqual([p['probability'] for p in top], sorted((p['probability'] for p in top), reverse=True))
         with patch.object(app, 'TOP_PICK_MIN_PROBABILITY', 1.):
             result = self.client.get('/picks').get_json()
         self.assertEqual(result['top_picks'], [])
         self.assertEqual(result['top_picks_status'], 'no top pick right now')
-        result = self.client.get('/picks?league=gt12').get_json()
-        self.assertEqual(result['top_picks'], [])
 
-    def test_top_query_returns_only_the_safest_trusted_calls(self):
+    def test_safest_option_is_the_highest_probability_selection(self):
+        pick = self.client.get('/picks?league=esb8').get_json()['leagues']['esb8'][0]
+        option = pick['safest_option']
+        best = max(list(pick['one_x_two'].values()) + list(pick['double_chance'].values()) + [pick['goals_probability']])
+        self.assertAlmostEqual(option['probability'], best, places=3)
+        carol = self.client.get('/picks?league=esb8').get_json()['leagues']['esb8'][1]
+        self.assertIsNone(carol['safest_option'])
+
+    def test_top_query_returns_only_the_safest_options(self):
         with patch.object(app, 'TOP_PICK_MIN_PROBABILITY', 1.):
             result = self.client.get('/picks?top=2').get_json()
         self.assertNotIn('leagues', result)
         top = result['top_picks']
         self.assertEqual(len(top), 2)
-        self.assertTrue(all(pick['league'] in app.TRUSTED_GOAL_LEAGUES and pick['goals_call'] for pick in top))
-        self.assertTrue(all(pick['grade'] == 'standard' for pick in top))
-        self.assertGreaterEqual(top[0]['goals_probability'], top[1]['goals_probability'])
-        result = self.client.get('/picks?top=1&league=volta6&fields=home_tag,goals_call').get_json()
-        self.assertEqual(set(result['top_picks'][0]), {'home_tag', 'goals_call', 'league', 'grade'})
+        self.assertGreaterEqual(top[0]['probability'], top[1]['probability'])
+        result = self.client.get('/picks?top=1&league=volta6&fields=home_tag,kickoff_utc').get_json()
+        self.assertEqual(set(result['top_picks'][0]), {'home_tag', 'kickoff_utc', 'league', 'market', 'selection',
+                                                       'probability', 'league_rate', 'proven_edge'})
         self.assertEqual(result['top_picks'][0]['league'], 'volta6')
         for query in ('top=0', 'top=11', 'top=x', 'top=1&top=2'):
             with self.subTest(query=query):

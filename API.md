@@ -74,20 +74,24 @@ gzip and ETag behavior.
 | `warnings` | Model warnings, such as limited player history |
 | `one_x_two`, `double_chance` | Home/draw/away and 1X/X2/12 probabilities, for information only (`winner_markets_trust`: not trusted, since they did not beat league outcome rates in replays) |
 
-`top_picks` lists up to two of the strongest goals calls across the selected
-leagues: esb8 or volta6, at least 60%, within the pick window, each with its
-`league`. Over/under is the only market offered there; replays found model
-1X2 and double-chance choices did worse than the league's most common result.
-`top_picks_status` is `no top pick right now` when nothing qualifies.
+Each eligible game (fresh league, both players with at least 5 results) has a
+`safest_option`: its single likeliest selection across 1X2, double chance and
+over/under at the league line, with `market`, `selection`, `probability`, the
+`league_rate` for that selection in this snapshot, and `proven_edge`.
 
-`top=N` (1–10) returns only `top_picks`: the N highest-probability goals calls
-in esb8 and volta6 within the window, even below 60%. Each carries `grade`:
-`strong` at 60% or more, otherwise `standard`. `league`, `player` and
-`fields` still apply.
+`top_picks` lists up to two games whose safest option is at least 60%, most
+likely first, each with its `league` and safest-option fields.
+`top_picks_status` is `no top pick right now` when nothing qualifies.
+`proven_edge` is true only for over/under calls in esb8 and volta6. Replays
+found model 1X2 and double-chance choices landed slightly less often than the
+league's most common result, so a likely double chance is not a proven edge.
+
+`top=N` (1–10) returns only `top_picks`: the N likeliest safest options within
+the window, even below 60%. `league`, `player` and `fields` still apply.
 
 ```text
 /picks?top=2
-/picks?top=2&fields=home_tag,away_tag,kickoff_utc,goals_line,goals_call,goals_probability
+/picks?top=2&fields=home_tag,away_tag,kickoff_utc
 ```
 
 ```text
