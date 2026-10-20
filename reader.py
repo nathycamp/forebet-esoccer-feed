@@ -254,6 +254,8 @@ THIRD_PARTY_HOSTS = (
     "teads.tv", "33across.com", "sharethrough.com", "media.net", "adsrvr.org", "bidswitch.net",
     "facebook.net", "connect.facebook.net", "scorecardresearch.com", "quantserve.com",
     "hotjar.com", "clarity.ms", "onesignal.com", "yandex.ru", "mc.yandex.ru",
+    # Google's consent and ad-blocker messaging: up to ~575 KB in some cycles.
+    "fundingchoicesmessages.google.com",
 )
 
 
