@@ -6,7 +6,9 @@ import os
 import re
 import sys
 import statistics
+from collections import defaultdict
 from datetime import datetime, timedelta, timezone
+from urllib.parse import urlsplit
 
 from patchright.sync_api import sync_playwright
 
@@ -242,17 +244,60 @@ def visit(page, url, fixture_page=False):
         page.wait_for_timeout(1000)
 
 
-def block_forebet_assets(context, page):
-    """Skip visual assets on league pages without disabling Chrome's HTTP cache."""
+# Advertising and analytics hosts the fixture rows never need. Cloudflare's
+# challenge (challenges.cloudflare.com) and Forebet's own scripts stay allowed.
+THIRD_PARTY_HOSTS = (
+    "doubleclick.net", "googlesyndication.com", "googleadservices.com", "adservice.google.com",
+    "googletagmanager.com", "googletagservices.com", "google-analytics.com", "analytics.google.com",
+    "amazon-adsystem.com", "adnxs.com", "criteo.com", "criteo.net", "taboola.com", "outbrain.com",
+    "pubmatic.com", "rubiconproject.com", "openx.net", "casalemedia.com", "smartadserver.com",
+    "teads.tv", "33across.com", "sharethrough.com", "media.net", "adsrvr.org", "bidswitch.net",
+    "facebook.net", "connect.facebook.net", "scorecardresearch.com", "quantserve.com",
+    "hotjar.com", "clarity.ms", "onesignal.com", "yandex.ru", "mc.yandex.ru",
+)
+
+
+def block_forebet_assets(context, page, third_party=False):
+    """Skip visual assets (and optionally ad/analytics hosts) without disabling Chrome's HTTP cache."""
     extensions = ("png", "jpg", "jpeg", "gif", "webp", "avif", "svg", "ico",
                   "woff", "woff2", "ttf", "otf", "mp4", "webm")
+    urls = [f"*forebet.com/*.{extension}*" for extension in extensions]
+    if third_party:
+        urls += [f"*{host}/*" for host in THIRD_PARTY_HOSTS]
     session = context.new_cdp_session(page)
     session.send("Network.enable")
-    session.send("Network.setBlockedURLs", {
-        "urls": [f"*forebet.com/*.{extension}*" for extension in extensions],
-    })
-    logger.info("Blocking Forebet image, font and media URLs on league pages")
+    session.send("Network.setBlockedURLs", {"urls": urls})
+    logger.info("Blocking Forebet image, font and media URLs%s", " and ad/analytics hosts" if third_party else "")
     return session
+
+
+class ByteMeter:
+    """Sum bytes actually received over the network, per page visit and per host."""
+
+    def __init__(self, context, page):
+        self.label = "home"
+        self.urls = {}
+        self.by_label = defaultdict(int)
+        self.by_host = defaultdict(int)
+        self.session = context.new_cdp_session(page)
+        self.session.on("Network.responseReceived", self.response)
+        self.session.on("Network.loadingFinished", self.finished)
+        self.session.send("Network.enable")
+
+    def response(self, event):
+        self.urls[event["requestId"]] = event["response"]["url"]
+
+    def finished(self, event):
+        size = int(event.get("encodedDataLength") or 0)
+        self.by_label[self.label] += size
+        self.by_host[urlsplit(self.urls.pop(event["requestId"], "")).hostname or "unknown"] += size
+
+    def log(self):
+        total = sum(self.by_label.values())
+        hosts = sorted(self.by_host.items(), key=lambda item: item[1], reverse=True)[:5]
+        logger.info("Network bytes this cycle: %d KB (%s); top hosts: %s", total // 1024,
+                    ", ".join(f"{label} {size // 1024}" for label, size in self.by_label.items()),
+                    ", ".join(f"{host} {size // 1024}" for host, size in hosts))
 
 
 def read_pages():
@@ -279,19 +324,35 @@ def read_pages():
             viewport={"width": 1280, "height": 800},
             timezone_id="UTC",
         )
+        meter = None
         try:
             page = context.pages[0] if context.pages else context.new_page()
+            try:
+                meter = ByteMeter(context, page)
+            except Exception:
+                logger.exception("Could not measure network bytes; continuing normally")
+
+            def block():
+                try:
+                    block_forebet_assets(context, page, third_party=os.environ.get("BLOCK_THIRD_PARTY", "1") == "1")
+                except Exception:
+                    logger.exception("Could not block visual assets; continuing normally")
+            # Blocking before the homepage saves its images and ads too; set
+            # BLOCK_BEFORE_HOMEPAGE=0 to restore blocking only after it.
+            blocking = os.environ.get("BLOCK_FOREBET_ASSETS", "1") == "1"
+            early = blocking and os.environ.get("BLOCK_BEFORE_HOMEPAGE", "1") == "1"
+            if early:
+                block()
             logger.info("Visiting Forebet homepage at %s", datetime.now(timezone.utc).isoformat())
             try:
                 visit(page, "https://www.forebet.com/")
-                if os.environ.get("BLOCK_FOREBET_ASSETS", "1") == "1":
-                    try:
-                        block_forebet_assets(context, page)
-                    except Exception:
-                        logger.exception("Could not block visual assets; continuing normally")
+                if blocking and not early:
+                    block()
             except Exception:
                 logger.exception("Homepage visit failed; continuing with league pages")
             for key, url in LEAGUES.items():
+                if meter:
+                    meter.label = key
                 logger.info("Reading %s at %s", key, datetime.now(timezone.utc).isoformat())
                 try:
                     visit(page, url, fixture_page=True)
@@ -307,6 +368,11 @@ def read_pages():
                     leagues[key] = {"status": "error", "error": str(exc)}
                     logger.exception("Failed to read %s", key)
         finally:
+            if meter:
+                try:
+                    meter.log()
+                except Exception:
+                    logger.exception("Could not log network bytes")
             context.close()
     return leagues
 

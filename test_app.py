@@ -248,6 +248,27 @@ class ReaderServiceTests(unittest.TestCase):
         self.assertTrue(all("forebet.com" in pattern for pattern in patterns))
         self.assertFalse(any("cloudflare.com" in pattern for pattern in patterns))
 
+    def test_third_party_blocking_spares_cloudflare_and_forebet_scripts(self):
+        session = reader.block_forebet_assets(MagicMock(), MagicMock(), third_party=True)
+        patterns = session.send.call_args_list[1].args[1]["urls"]
+        self.assertTrue(any("doubleclick.net" in pattern for pattern in patterns))
+        self.assertFalse(any("cloudflare" in pattern for pattern in patterns))
+        self.assertFalse(any(pattern.endswith(".js*") for pattern in patterns))
+
+    def test_byte_meter_sums_per_page_and_host(self):
+        context = MagicMock()
+        meter = reader.ByteMeter(context, MagicMock())
+        meter.response({"requestId": "1", "response": {"url": "https://www.forebet.com/en/esoccer"}})
+        meter.finished({"requestId": "1", "encodedDataLength": 4096})
+        meter.label = "esb8"
+        meter.response({"requestId": "2", "response": {"url": "https://ads.doubleclick.net/x"}})
+        meter.finished({"requestId": "2", "encodedDataLength": 2048})
+        self.assertEqual(dict(meter.by_label), {"home": 4096, "esb8": 2048})
+        self.assertEqual(meter.by_host["www.forebet.com"], 4096)
+        with self.assertLogs(reader.logger, level="INFO") as logs:
+            meter.log()
+        self.assertIn("Network bytes this cycle: 6 KB", logs.output[0])
+
     def test_hung_reader_is_killed(self):
         process = MagicMock()
         process.pid = 12345
