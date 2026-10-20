@@ -345,13 +345,20 @@ def read_pages():
             early = blocking and os.environ.get("BLOCK_BEFORE_HOMEPAGE", "1") == "1"
             if early:
                 block()
-            logger.info("Visiting Forebet homepage at %s", datetime.now(timezone.utc).isoformat())
-            try:
-                visit(page, "https://www.forebet.com/")
+            # SKIP_HOMEPAGE=1 goes straight to the league pages, which clear any
+            # Cloudflare challenge themselves; off by default while it is trialled.
+            if os.environ.get("SKIP_HOMEPAGE", "0") == "1":
+                logger.info("Skipping Forebet homepage")
                 if blocking and not early:
                     block()
-            except Exception:
-                logger.exception("Homepage visit failed; continuing with league pages")
+            else:
+                logger.info("Visiting Forebet homepage at %s", datetime.now(timezone.utc).isoformat())
+                try:
+                    visit(page, "https://www.forebet.com/")
+                    if blocking and not early:
+                        block()
+                except Exception:
+                    logger.exception("Homepage visit failed; continuing with league pages")
             for key, url in LEAGUES.items():
                 if meter:
                     meter.label = key

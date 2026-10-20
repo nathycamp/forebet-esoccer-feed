@@ -269,6 +269,19 @@ class ReaderServiceTests(unittest.TestCase):
             meter.log()
         self.assertIn("Network bytes this cycle: 6 KB", logs.output[0])
 
+    def test_skip_homepage_goes_straight_to_league_pages(self):
+        environment = {"SHIFTER_USER": "u", "SHIFTER_HOST": "h", "SHIFTER_PORT": "1", "SHIFTER_PASS": "p",
+                       "SKIP_HOMEPAGE": "1", "BROWSER_PROFILE_DIR": "/tmp/forebet-test-profile"}
+        playwright = MagicMock()
+        with patch.dict(reader.os.environ, environment), \
+                patch.object(reader, "sync_playwright") as launcher, \
+                patch.object(reader, "visit") as visit, \
+                patch.object(reader, "extract_fixtures", return_value=[]):
+            launcher.return_value.__enter__.return_value = playwright
+            reader.read_pages()
+        urls = [call.args[1] for call in visit.call_args_list]
+        self.assertEqual(urls, list(reader.LEAGUES.values()))
+
     def test_hung_reader_is_killed(self):
         process = MagicMock()
         process.pid = 12345
