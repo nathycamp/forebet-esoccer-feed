@@ -18,7 +18,7 @@ from apscheduler.schedulers.background import BackgroundScheduler
 from flask import Flask, Response, jsonify, request
 
 from prediction_engine import MODEL_VERSION, predict_feed
-from reader import LEAGUES
+from reader import LEAGUES, load_free_proxy_pool, refresh_free_proxy_pool
 
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -33,7 +33,7 @@ cache = {
     "leagues": {},
 }
 MAX_CACHE_AGE_SECONDS = 6 * 60
-READER_TIMEOUT_SECONDS = 100
+READER_TIMEOUT_SECONDS = int(os.environ.get("READER_TIMEOUT_SECONDS", "100"))
 proxy_session_id = uuid.uuid4().hex[:12]
 FIXTURE_FIELDS = {
     "home_tag", "away_tag", "home_club", "away_club", "kickoff_utc",
@@ -194,6 +194,7 @@ def health():
             "status": "ok",
             "last_fetch": cache["last_fetch"],
             "last_status": cache["last_status"],
+            "free_proxies_ready": len(load_free_proxy_pool()),
         })
 
 
@@ -442,6 +443,17 @@ def start_scheduler():
         coalesce=True,
         id="forebet-reader",
     )
+    # The proxifly list updates every 5 minutes; keep tested backups ready for when Shifter fails.
+    if os.environ.get("PROXY_SOURCE", "auto") != "shifter":
+        scheduler.add_job(
+            refresh_free_proxy_pool,
+            "interval",
+            minutes=5,
+            next_run_time=datetime.now(timezone.utc),
+            max_instances=1,
+            coalesce=True,
+            id="free-proxy-pool",
+        )
     scheduler.start()
     return scheduler
 

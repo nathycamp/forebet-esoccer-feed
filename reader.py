@@ -1,12 +1,16 @@
-"""Read rendered Forebet pages through the Shifter residential proxy."""
+"""Read rendered Forebet pages through the Shifter residential proxy or free proxifly proxies."""
 
 import logging
 import json
 import os
+import random
 import re
+import socket
 import sys
 import statistics
+import urllib.request
 from collections import defaultdict
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta, timezone
 from urllib.parse import urlsplit
 
@@ -302,87 +306,217 @@ class ByteMeter:
                     ", ".join(f"{host} {size // 1024}" for host, size in hosts))
 
 
-def read_pages():
-    """Return each league's parsed fixtures, or an error status."""
+PROXY_LIST_URL = "https://raw.githubusercontent.com/proxifly/free-proxy-list/main/proxies/countries/US/data.txt"
+LAST_PROXY_FILE = os.environ.get("LAST_PROXY_FILE", "/tmp/forebet-last-proxy")
+FREE_PROXY_POOL_FILE = os.environ.get("FREE_PROXY_POOL_FILE", "/tmp/forebet-free-proxies.json")
+MAX_PROXY_ATTEMPTS = 3
+MIN_FREE_PROXIES = 5
+
+
+def tunnel_opens(proxy, host="www.forebet.com", port=443, timeout=6):
+    """True when a free proxy opens a tunnel to Forebet (HTTP CONNECT or SOCKS5)."""
+    parts = urlsplit(proxy)
+    try:
+        with socket.create_connection((parts.hostname, parts.port), timeout=timeout) as conn:
+            conn.settimeout(timeout)
+            if parts.scheme == "socks5":
+                conn.sendall(b"\x05\x01\x00")
+                if conn.recv(2) != b"\x05\x00":
+                    return False
+                conn.sendall(b"\x05\x01\x00\x03" + bytes([len(host)]) + host.encode() + port.to_bytes(2, "big"))
+                reply = conn.recv(10)
+                return len(reply) >= 2 and reply[1] == 0
+            conn.sendall(f"CONNECT {host}:{port} HTTP/1.1\r\nHost: {host}:{port}\r\n\r\n".encode())
+            return conn.recv(64).split(b" ")[1:2] == [b"200"]
+    except (OSError, ValueError):
+        return False
+
+
+def free_proxies(limit=MAX_PROXY_ATTEMPTS, sample=400, deadline=15, exclude=()):
+    """Return up to limit proxies from the proxifly US list, fastest tunnels first."""
+    with urllib.request.urlopen(PROXY_LIST_URL, timeout=10) as response:
+        listed = [line.strip() for line in response.read().decode().splitlines()
+                  if line.startswith(("http://", "socks5://")) and line.strip() not in exclude]
+    random.shuffle(listed)
+    found = []
+    pool = ThreadPoolExecutor(max_workers=64)
+    futures = {pool.submit(tunnel_opens, proxy): proxy for proxy in listed[:sample]}
+    try:
+        for future in as_completed(futures, timeout=deadline):
+            if future.result():
+                found.append(futures[future])
+                if len(found) >= limit:
+                    break
+    except TimeoutError:
+        pass
+    pool.shutdown(wait=False, cancel_futures=True)
+    logger.info("Free proxy list: %d listed, %d tested, %d tunnel to Forebet", len(listed), min(sample, len(listed)), len(found))
+    return found
+
+
+def load_free_proxy_pool():
+    try:
+        with open(FREE_PROXY_POOL_FILE) as handle:
+            return [server for server in json.load(handle) if isinstance(server, str)]
+    except (OSError, ValueError, TypeError):
+        return []
+
+
+def refresh_free_proxy_pool(minimum=MIN_FREE_PROXIES, spare=3):
+    """Retest the pooled free proxies and top the pool up so at least `minimum` tested ones stay ready."""
+    pool = load_free_proxy_pool()
+    with ThreadPoolExecutor(max_workers=16) as pool_tester:
+        alive = [server for server, ok in zip(pool, pool_tester.map(tunnel_opens, pool)) if ok]
+    if len(alive) < minimum + spare:
+        try:
+            alive += free_proxies(limit=minimum + spare - len(alive), exclude=set(alive))
+        except Exception:
+            logger.exception("Could not load the free proxy list")
+    temporary = FREE_PROXY_POOL_FILE + ".tmp"
+    with open(temporary, "w") as handle:
+        json.dump(alive, handle)
+    os.replace(temporary, FREE_PROXY_POOL_FILE)
+    level = logging.INFO if len(alive) >= minimum else logging.WARNING
+    logger.log(level, "Free proxy pool: %d tested and ready (minimum %d)", len(alive), minimum)
+    return alive
+
+
+def shifter_proxy():
     username = os.environ["SHIFTER_USER"]
     session_id = os.environ.get("SHIFTER_SESSION_ID")
     if session_id and "-sid-" not in username:
         username = f"{username}-sid-{session_id}-ttl-600"
-    proxy = {
+    return {
         "server": f"http://{os.environ['SHIFTER_HOST']}:{os.environ['SHIFTER_PORT']}",
         "username": username,
         "password": os.environ["SHIFTER_PASS"],
     }
+
+
+def proxy_candidates():
+    """Yield Shifter first, then (as a backup) the last free proxy that worked and fresh ones from the list.
+
+    PROXY_SOURCE=shifter disables the backup; PROXY_SOURCE=proxifly skips Shifter.
+    """
+    source = os.environ.get("PROXY_SOURCE", "auto")
+    if source != "proxifly" and os.environ.get("SHIFTER_USER"):
+        yield shifter_proxy()
+    if source == "shifter":
+        return
+    servers = []
+    try:
+        with open(LAST_PROXY_FILE) as handle:
+            servers.append(handle.read().strip())
+    except OSError:
+        pass
+    servers += load_free_proxy_pool()
+    if len(set(filter(None, servers))) < MAX_PROXY_ATTEMPTS:
+        try:
+            servers += free_proxies(exclude=set(servers))
+        except Exception:
+            logger.exception("Could not load the free proxy list")
+    for server in list(dict.fromkeys(filter(None, servers)))[:MAX_PROXY_ATTEMPTS]:
+        yield {"server": server}
+
+
+def remember_proxy(server):
+    try:
+        if server:
+            with open(LAST_PROXY_FILE, "w") as handle:
+                handle.write(server)
+        elif os.path.exists(LAST_PROXY_FILE):
+            os.remove(LAST_PROXY_FILE)
+    except OSError:
+        logger.exception("Could not update the last working proxy")
+
+
+def read_pages():
+    """Return each league's parsed fixtures, or an error status."""
+    retry = os.environ.get("PROXY_SOURCE", "auto") != "shifter"
     leagues = {}
+    proxy = None
     profile = os.environ.get("BROWSER_PROFILE_DIR", "/tmp/forebet-chrome-profile")
     os.makedirs(profile, exist_ok=True)
     with sync_playwright() as playwright:
-        context = playwright.chromium.launch_persistent_context(
-            profile,
-            channel="chrome",
-            headless=False,
-            proxy=proxy,
-            args=["--no-sandbox", "--disable-dev-shm-usage"],
-            viewport={"width": 1280, "height": 800},
-            timezone_id="UTC",
-        )
-        meter = None
-        try:
-            page = context.pages[0] if context.pages else context.new_page()
+        for number, proxy in enumerate(proxy_candidates(), 1):
+            # A proxy that cannot clear the homepage is swapped for the next candidate.
+            can_retry = retry and number <= MAX_PROXY_ATTEMPTS
+            if "username" not in proxy:
+                logger.info("Using backup free proxy %s (candidate %d)", proxy["server"], number)
+            context = playwright.chromium.launch_persistent_context(
+                profile,
+                channel="chrome",
+                headless=False,
+                proxy=proxy,
+                args=["--no-sandbox", "--disable-dev-shm-usage"],
+                viewport={"width": 1280, "height": 800},
+                timezone_id="UTC",
+            )
+            meter = None
             try:
-                meter = ByteMeter(context, page)
-            except Exception:
-                logger.exception("Could not measure network bytes; continuing normally")
-
-            def block():
+                page = context.pages[0] if context.pages else context.new_page()
                 try:
-                    block_forebet_assets(context, page, third_party=os.environ.get("BLOCK_THIRD_PARTY", "1") == "1")
+                    meter = ByteMeter(context, page)
                 except Exception:
-                    logger.exception("Could not block visual assets; continuing normally")
-            # Blocking before the homepage saves its images and ads too; set
-            # BLOCK_BEFORE_HOMEPAGE=0 to restore blocking only after it.
-            blocking = os.environ.get("BLOCK_FOREBET_ASSETS", "1") == "1"
-            early = blocking and os.environ.get("BLOCK_BEFORE_HOMEPAGE", "1") == "1"
-            if early:
-                block()
-            # SKIP_HOMEPAGE=1 goes straight to the league pages, which clear any
-            # Cloudflare challenge themselves; off by default while it is trialled.
-            if os.environ.get("SKIP_HOMEPAGE", "0") == "1":
-                logger.info("Skipping Forebet homepage")
-                if blocking and not early:
+                    logger.exception("Could not measure network bytes; continuing normally")
+
+                def block():
+                    try:
+                        block_forebet_assets(context, page, third_party=os.environ.get("BLOCK_THIRD_PARTY", "1") == "1")
+                    except Exception:
+                        logger.exception("Could not block visual assets; continuing normally")
+                # Blocking before the homepage saves its images and ads too; set
+                # BLOCK_BEFORE_HOMEPAGE=0 to restore blocking only after it.
+                blocking = os.environ.get("BLOCK_FOREBET_ASSETS", "1") == "1"
+                early = blocking and os.environ.get("BLOCK_BEFORE_HOMEPAGE", "1") == "1"
+                if early:
                     block()
-            else:
-                logger.info("Visiting Forebet homepage at %s", datetime.now(timezone.utc).isoformat())
-                try:
-                    visit(page, "https://www.forebet.com/")
+                # SKIP_HOMEPAGE=1 goes straight to the league pages, which clear any
+                # Cloudflare challenge themselves; off by default while it is trialled.
+                if os.environ.get("SKIP_HOMEPAGE", "0") == "1":
+                    logger.info("Skipping Forebet homepage")
                     if blocking and not early:
                         block()
-                except Exception:
-                    logger.exception("Homepage visit failed; continuing with league pages")
-            for key, url in LEAGUES.items():
+                else:
+                    logger.info("Visiting Forebet homepage at %s", datetime.now(timezone.utc).isoformat())
+                    try:
+                        visit(page, "https://www.forebet.com/")
+                        if blocking and not early:
+                            block()
+                    except Exception:
+                        if can_retry:
+                            logger.warning("Homepage failed through %s; trying the next proxy",
+                                           proxy["server"].rsplit("@", 1)[-1], exc_info=True)
+                            continue
+                        logger.exception("Homepage visit failed; continuing with league pages")
+                for key, url in LEAGUES.items():
+                    if meter:
+                        meter.label = key
+                    logger.info("Reading %s at %s", key, datetime.now(timezone.utc).isoformat())
+                    try:
+                        visit(page, url, fixture_page=True)
+                        fixtures = extract_fixtures(page, key)
+                        observed_at = datetime.now(timezone.utc)
+                        leagues[key] = {
+                            "fixtures": fixtures,
+                            "status": "ok",
+                            "fetched_at": observed_at.isoformat().replace("+00:00", "Z"),
+                            "clock_check": check_live_clock(fixtures, observed_at, MATCH_MINUTES[key]),
+                        }
+                    except Exception as exc:
+                        leagues[key] = {"status": "error", "error": str(exc)}
+                        logger.exception("Failed to read %s", key)
+            finally:
                 if meter:
-                    meter.label = key
-                logger.info("Reading %s at %s", key, datetime.now(timezone.utc).isoformat())
-                try:
-                    visit(page, url, fixture_page=True)
-                    fixtures = extract_fixtures(page, key)
-                    observed_at = datetime.now(timezone.utc)
-                    leagues[key] = {
-                        "fixtures": fixtures,
-                        "status": "ok",
-                        "fetched_at": observed_at.isoformat().replace("+00:00", "Z"),
-                        "clock_check": check_live_clock(fixtures, observed_at, MATCH_MINUTES[key]),
-                    }
-                except Exception as exc:
-                    leagues[key] = {"status": "error", "error": str(exc)}
-                    logger.exception("Failed to read %s", key)
-        finally:
-            if meter:
-                try:
-                    meter.log()
-                except Exception:
-                    logger.exception("Could not log network bytes")
-            context.close()
+                    try:
+                        meter.log()
+                    except Exception:
+                        logger.exception("Could not log network bytes")
+                context.close()
+            break
+    if proxy and "username" not in proxy:
+        read_any = any(page.get("status") == "ok" for page in leagues.values())
+        remember_proxy(proxy["server"] if read_any else None)
     return leagues
 
 

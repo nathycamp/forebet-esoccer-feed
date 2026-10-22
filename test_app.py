@@ -1,3 +1,4 @@
+import os
 import unittest
 from datetime import datetime, timedelta, timezone
 import subprocess
@@ -18,10 +19,21 @@ class ReaderServiceTests(unittest.TestCase):
                 "leagues": {},
             })
 
+    def test_free_proxies_back_up_shifter(self):
+        environment = {"SHIFTER_USER": "u", "SHIFTER_HOST": "h", "SHIFTER_PORT": "1", "SHIFTER_PASS": "p",
+                       "LAST_PROXY_FILE": "/nonexistent/last"}
+        with patch.dict(os.environ, environment), \
+                patch.object(reader, "LAST_PROXY_FILE", "/nonexistent/last"), \
+                patch.object(reader, "load_free_proxy_pool", return_value=["socks5://1.1.1.1:1", "http://2.2.2.2:2", "http://3.3.3.3:3"]), \
+                patch.object(reader, "free_proxies") as fetch:
+            servers = [proxy["server"] for proxy in reader.proxy_candidates()]
+        self.assertEqual(servers, ["http://h:1", "socks5://1.1.1.1:1", "http://2.2.2.2:2", "http://3.3.3.3:3"])
+        fetch.assert_not_called()
+
     def test_health_and_structured_fixtures(self):
-        with app.app.test_client() as client:
+        with app.app.test_client() as client, patch.object(app, "load_free_proxy_pool", return_value=["http://1.2.3.4:80"] * 5):
             self.assertEqual(client.get("/").get_json(), {
-                "status": "ok", "last_fetch": None, "last_status": "error"
+                "status": "ok", "last_fetch": None, "last_status": "error", "free_proxies_ready": 5
             })
         with patch.object(app, "run_reader", return_value={
             key: {"fixtures": [{"home_tag": "Mani", "kickoff_utc": "2026-10-18T16:55:00+00:00"}], "status": "ok"}
