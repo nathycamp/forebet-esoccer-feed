@@ -201,6 +201,17 @@ class PicksTests(unittest.TestCase):
         self.assertEqual(result['top_picks'], [])
         self.assertEqual(result['top_picks_status'], 'no top pick right now')
 
+    def test_goal_lines_give_every_line_with_fair_odds(self):
+        pick = self.client.get('/picks?league=esb8').get_json()['leagues']['esb8'][0]
+        lines = pick['goal_lines']
+        self.assertIn(str(pick['goals_line']), lines)
+        overs = [lines[line]['over'] for line in sorted(lines, key=float)]
+        self.assertEqual(overs, sorted(overs, reverse=True))
+        for value in lines.values():
+            self.assertAlmostEqual(value['over'] + value['under'], 1, places=3)
+            if value['fair_over_odds']:
+                self.assertAlmostEqual(value['fair_over_odds'], 1 / value['over'], delta=.01)
+
     def test_safest_option_prefers_the_proven_goals_call(self):
         pick = self.client.get('/picks?league=esb8').get_json()['leagues']['esb8'][0]
         option = pick['safest_option']

@@ -80,6 +80,11 @@ edge (esb8 and volta6 goal calls), otherwise its single likeliest selection
 across 1X2, double chance and over/under, with `market`, `selection`, `probability`, the
 `league_rate` for that selection in this snapshot, and `proven_edge`.
 
+`goal_lines` gives every x.5 line from 1.5 to 9.5 with the model's `over` and
+`under` chances and the matching `fair_over_odds` / `fair_under_odds` (1 ÷
+chance). A bookmaker price above the fair odds is better value than the model
+expects; only the league line itself has a replay-proven edge.
+
 `top_picks` lists up to two games whose safest option is at least 60%, proven
 over/under calls first and then the likeliest, each with its `league` and safest-option fields.
 `top_picks_status` is `no top pick right now` when nothing qualifies.

@@ -48,6 +48,7 @@ PICK_FIELDS = {
     "goals_confidence", "favourite", "favourite_probability",
     "favourite_strength", "call_status", "warnings",
     "one_x_two", "double_chance", "winner_markets_trust", "safest_option",
+    "goal_lines",
 }
 # Replays of the feed's own results showed a goals edge at the league line only here.
 TRUSTED_GOAL_LEAGUES = {"esb8", "volta6"}
@@ -310,6 +311,19 @@ def safest_option(pick, winner, rates, over, over_rate, league):
             "league_rate": round(league_rate, 4), "proven_edge": proven}
 
 
+def goal_lines(totals):
+    """Over/under chances and fair odds at every x.5 line, to compare with a bookmaker's prices."""
+    lines = {}
+    for line, value in sorted(totals.items(), key=lambda item: float(item[0])):
+        if float(line) % 1 != .5 or not 1.5 <= float(line) <= 9.5:
+            continue
+        over = value["over"]
+        lines[line] = {"over": round(over, 4), "under": round(1 - over, 4),
+                       "fair_over_odds": round(1 / over, 2) if over > .001 else None,
+                       "fair_under_odds": round(1 / (1 - over), 2) if over < .999 else None}
+    return lines
+
+
 def build_picks(feed, now):
     """Goal calls at each league's usual line, with a weak favourite as context."""
     forecasts = predict_feed(feed, now=now, use_live_scores=True)
@@ -340,7 +354,7 @@ def build_picks(feed, now):
                                            "X2": round(winner["X"] + winner["2"], 4),
                                            "12": round(winner["1"] + winner["2"], 4)},
                          "winner_markets_trust": "not trusted: did not beat league rates in replays",
-                         "safest_option": None})
+                         "safest_option": None, "goal_lines": None})
             if diagnostics["stale"]:
                 pick.update({"call_status": "withheld: stale source", "favourite": None, "favourite_probability": None,
                              "one_x_two": None, "double_chance": None})
@@ -351,6 +365,7 @@ def build_picks(feed, now):
                 probability = max(over, 1 - over)
                 history = min(forecast["evidence"][side]["history_matches"] for side in ("home", "away"))
                 pick["goals_probability"] = round(probability, 4)
+                pick["goal_lines"] = goal_lines(forecast["totals"])
                 if history < MIN_PLAYER_GAMES:
                     pick["call_status"] = "no call: new players"
                 elif probability < MIN_CALL_PROBABILITY:
