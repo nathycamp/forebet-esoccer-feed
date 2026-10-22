@@ -48,7 +48,7 @@ PICK_FIELDS = {
     "goals_confidence", "favourite", "favourite_probability",
     "favourite_strength", "call_status", "warnings",
     "one_x_two", "double_chance", "winner_markets_trust", "safest_option",
-    "goal_lines",
+    "goal_lines", "kickoff_adjusted_minutes", "listed_kickoff_utc",
 }
 # Replays of the feed's own results showed a goals edge at the league line only here.
 TRUSTED_GOAL_LEAGUES = {"esb8", "volta6"}
@@ -61,6 +61,12 @@ PICK_WINDOW_MINUTES = 20
 # (73% landed at 60%+), while model 1X2 and double-chance picks did worse than
 # simply taking the league's most common result. So the safest option is the
 # goals call wherever that edge applies, and top picks rank those first.
+# A steady Forebet delay in the proven leagues shifts kickoffs instead of
+# withholding picks; an uneven or extreme delay still withholds them.
+DELAY_ADJUST_LEAGUES = TRUSTED_GOAL_LEAGUES
+DELAY_MIN_FIXTURES = 2
+DELAY_MAX_SPREAD_MINUTES = 3
+DELAY_MAX_MINUTES = 45
 TOP_PICK_MIN_PROBABILITY = .60
 TOP_PICKS = 2
 picks_lock = threading.Lock()
@@ -324,8 +330,42 @@ def goal_lines(totals):
     return lines
 
 
+def steady_delay(check):
+    """Whole minutes a league runs late when its live clocks agree, else None."""
+    check = check or {}
+    delay, spread = check.get("median_residual_minutes"), check.get("residual_spread_minutes")
+    if (check.get("status") != "mismatch" or delay is None or spread is None
+            or check.get("live_fixtures_checked", 0) < DELAY_MIN_FIXTURES
+            or spread > DELAY_MAX_SPREAD_MINUTES or not 0 < delay <= DELAY_MAX_MINUTES):
+        return None
+    return round(delay)
+
+
+def adjust_delays(feed):
+    """Shift unplayed kickoffs in leagues with a steady delay; returns (feed, minutes by league)."""
+    delays = {league: minutes for league in DELAY_ADJUST_LEAGUES
+              if (minutes := steady_delay(feed.get("league_clock_checks", {}).get(league)))}
+    if not delays:
+        return feed, {}
+    feed = json.loads(json.dumps(feed))
+    for league, minutes in delays.items():
+        rows = feed["leagues"].get(league)
+        if not isinstance(rows, list):
+            continue
+        for row in rows:
+            if row.get("status") in ("upcoming", "live"):
+                listed = datetime.fromisoformat(row["kickoff_utc"].replace("Z", "+00:00"))
+                row["listed_kickoff_utc"] = row["kickoff_utc"]
+                row["kickoff_utc"] = (listed + timedelta(minutes=minutes)).isoformat()
+        feed["league_clock_checks"][league] = dict(feed["league_clock_checks"][league], status="adjusted")
+    return feed, delays
+
+
 def build_picks(feed, now):
     """Goal calls at each league's usual line, with a weak favourite as context."""
+    feed, delays = adjust_delays(feed)
+    listed = {(key, row["home_tag"], row["away_tag"], row["kickoff_utc"]): row["listed_kickoff_utc"]
+              for key in delays for row in feed["leagues"][key] if "listed_kickoff_utc" in row}
     forecasts = predict_feed(feed, now=now, use_live_scores=True)
     leagues = {}
     for key, rows in feed["leagues"].items():
@@ -355,6 +395,10 @@ def build_picks(feed, now):
                                            "12": round(winner["1"] + winner["2"], 4)},
                          "winner_markets_trust": "not trusted: did not beat league rates in replays",
                          "safest_option": None, "goal_lines": None})
+            if key in delays:
+                pick["kickoff_adjusted_minutes"] = delays[key]
+                pick["listed_kickoff_utc"] = listed.get((key, pick["home_tag"], pick["away_tag"], pick["kickoff_utc"]))
+                pick["warnings"] = pick["warnings"] + [f"kickoff_adjusted_for_{delays[key]}_minute_delay"]
             if diagnostics["stale"]:
                 pick.update({"call_status": "withheld: stale source", "favourite": None, "favourite_probability": None,
                              "one_x_two": None, "double_chance": None})

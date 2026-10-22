@@ -173,7 +173,8 @@ def check_live_clock(fixtures, observed_at, duration=None):
     if status == "mismatch":
         logger.warning("Kickoff clock mismatch: %.1f minutes across %d live fixtures", residual, len(residuals))
     return {"status": status, "live_fixtures_checked": len(residuals),
-            "median_residual_minutes": round(residual, 2) if residual is not None else None}
+            "median_residual_minutes": round(residual, 2) if residual is not None else None,
+            "residual_spread_minutes": round(max(residuals) - min(residuals), 2) if residuals else None}
 
 
 def is_challenged(page):

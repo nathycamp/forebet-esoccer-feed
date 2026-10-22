@@ -157,6 +157,34 @@ class PicksTests(unittest.TestCase):
         self.assertIsNone(carol['goals_call'])
         self.assertEqual(carol['call_status'], 'no call: new players')
 
+    def set_clock(self, league, delay, spread, fixtures=3):
+        with app.cache_lock:
+            app.cache['leagues'][league]['clock_check'] = {
+                'status': 'mismatch', 'live_fixtures_checked': fixtures,
+                'median_residual_minutes': delay, 'residual_spread_minutes': spread}
+
+    def test_steady_delay_shifts_proven_league_kickoffs(self):
+        self.set_clock('esb8', 12.4, 1.)
+        self.set_clock('gt12', 12.4, 1.)
+        result = self.client.get('/picks').get_json()
+        alice = result['leagues']['esb8'][0]
+        self.assertEqual(alice['call_status'], 'ok')
+        self.assertEqual(alice['kickoff_adjusted_minutes'], 12)
+        listed = datetime.fromisoformat(alice['listed_kickoff_utc'])
+        self.assertEqual(datetime.fromisoformat(alice['kickoff_utc']) - listed, timedelta(minutes=12))
+        self.assertIn('kickoff_adjusted_for_12_minute_delay', alice['warnings'])
+        self.assertEqual(result['leagues']['gt12'][0]['call_status'], 'withheld: stale source')
+
+    def test_uneven_or_thin_delay_still_withholds(self):
+        for spread, fixtures in ((6., 3), (1., 1)):
+            with self.subTest(spread=spread, fixtures=fixtures):
+                self.set_clock('esb8', 12., spread, fixtures)
+                with app.picks_lock:
+                    app.picks_cache.update({'key': None, 'result': None})
+                pick = self.client.get('/picks?league=esb8').get_json()['leagues']['esb8'][0]
+                self.assertEqual(pick['call_status'], 'withheld: stale source')
+                self.assertNotIn('kickoff_adjusted_minutes', pick)
+
     def test_only_next_kickoff_or_twenty_minute_window(self):
         result = self.client.get('/picks?league=esb8').get_json()
         self.assertEqual([pick['home_tag'] for pick in result['leagues']['esb8']], ['Alice', 'Carol'])

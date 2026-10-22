@@ -85,6 +85,13 @@ across 1X2, double chance and over/under, with `market`, `selection`, `probabili
 chance). A bookmaker price above the fair odds is better value than the model
 expects; only the league line itself has a replay-proven edge.
 
+When esb8 or volta6 runs steadily late (at least 2 live clocks agreeing
+within 3 minutes, delay up to 45 minutes), picks continue with kickoffs shifted
+by the delay: `kickoff_utc` is the adjusted time, `listed_kickoff_utc` is
+Forebet's, `kickoff_adjusted_minutes` gives the shift and a
+`kickoff_adjusted_for_N_minute_delay` warning is added. Other mismatches still
+withhold picks.
+
 `top_picks` lists up to two games whose safest option is at least 60%, proven
 over/under calls first and then the likeliest, each with its `league` and safest-option fields.
 `top_picks_status` is `no top pick right now` when nothing qualifies.
