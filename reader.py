@@ -6,6 +6,7 @@ import os
 import random
 import re
 import socket
+import ssl
 import sys
 import statistics
 import urllib.request
@@ -314,7 +315,7 @@ MIN_FREE_PROXIES = 5
 
 
 def tunnel_opens(proxy, host="www.forebet.com", port=443, timeout=6):
-    """True when a free proxy opens a tunnel to Forebet (HTTP CONNECT or SOCKS5)."""
+    """True when a free proxy tunnels to Forebet (HTTP CONNECT or SOCKS5) and Forebet answers over TLS."""
     parts = urlsplit(proxy)
     try:
         with socket.create_connection((parts.hostname, parts.port), timeout=timeout) as conn:
@@ -325,21 +326,28 @@ def tunnel_opens(proxy, host="www.forebet.com", port=443, timeout=6):
                     return False
                 conn.sendall(b"\x05\x01\x00\x03" + bytes([len(host)]) + host.encode() + port.to_bytes(2, "big"))
                 reply = conn.recv(10)
-                return len(reply) >= 2 and reply[1] == 0
-            conn.sendall(f"CONNECT {host}:{port} HTTP/1.1\r\nHost: {host}:{port}\r\n\r\n".encode())
-            return conn.recv(64).split(b" ")[1:2] == [b"200"]
+                if len(reply) < 2 or reply[1] != 0:
+                    return False
+            else:
+                conn.sendall(f"CONNECT {host}:{port} HTTP/1.1\r\nHost: {host}:{port}\r\n\r\n".encode())
+                if conn.recv(4096).split(b" ")[1:2] != [b"200"]:
+                    return False
+            # Any HTTP reply (Cloudflare's 403 included) shows the proxy really carries Forebet traffic.
+            with ssl.create_default_context().wrap_socket(conn, server_hostname=host) as secure:
+                secure.sendall(f"HEAD / HTTP/1.1\r\nHost: {host}\r\nConnection: close\r\n\r\n".encode())
+                return secure.recv(16).startswith(b"HTTP/")
     except (OSError, ValueError):
         return False
 
 
-def free_proxies(limit=MAX_PROXY_ATTEMPTS, sample=400, deadline=15, exclude=()):
+def free_proxies(limit=MAX_PROXY_ATTEMPTS, sample=800, deadline=20, exclude=()):
     """Return up to limit proxies from the proxifly US list, fastest tunnels first."""
     with urllib.request.urlopen(PROXY_LIST_URL, timeout=10) as response:
         listed = [line.strip() for line in response.read().decode().splitlines()
                   if line.startswith(("http://", "socks5://")) and line.strip() not in exclude]
     random.shuffle(listed)
     found = []
-    pool = ThreadPoolExecutor(max_workers=64)
+    pool = ThreadPoolExecutor(max_workers=128)
     futures = {pool.submit(tunnel_opens, proxy): proxy for proxy in listed[:sample]}
     try:
         for future in as_completed(futures, timeout=deadline):
