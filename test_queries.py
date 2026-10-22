@@ -201,11 +201,16 @@ class PicksTests(unittest.TestCase):
         self.assertEqual(result['top_picks'], [])
         self.assertEqual(result['top_picks_status'], 'no top pick right now')
 
-    def test_safest_option_is_the_highest_probability_selection(self):
+    def test_safest_option_prefers_the_proven_goals_call(self):
         pick = self.client.get('/picks?league=esb8').get_json()['leagues']['esb8'][0]
         option = pick['safest_option']
-        best = max(list(pick['one_x_two'].values()) + list(pick['double_chance'].values()) + [pick['goals_probability']])
-        self.assertAlmostEqual(option['probability'], best, places=3)
+        if pick['goals_call'] is not None:
+            self.assertTrue(option['proven_edge'])
+            self.assertEqual(option['market'], 'over_under')
+            self.assertAlmostEqual(option['probability'], pick['goals_probability'], places=3)
+        else:
+            best = max(list(pick['one_x_two'].values()) + list(pick['double_chance'].values()) + [pick['goals_probability']])
+            self.assertAlmostEqual(option['probability'], best, places=3)
         carol = self.client.get('/picks?league=esb8').get_json()['leagues']['esb8'][1]
         self.assertIsNone(carol['safest_option'])
 
@@ -215,7 +220,7 @@ class PicksTests(unittest.TestCase):
         self.assertNotIn('leagues', result)
         top = result['top_picks']
         self.assertEqual(len(top), 2)
-        self.assertGreaterEqual(top[0]['probability'], top[1]['probability'])
+        self.assertGreaterEqual((top[0]['proven_edge'], top[0]['probability']), (top[1]['proven_edge'], top[1]['probability']))
         result = self.client.get('/picks?top=1&league=volta6&fields=home_tag,kickoff_utc').get_json()
         self.assertEqual(set(result['top_picks'][0]), {'home_tag', 'kickoff_utc', 'league', 'market', 'selection',
                                                        'probability', 'league_rate', 'proven_edge'})

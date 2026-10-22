@@ -58,8 +58,8 @@ MIN_PLAYER_GAMES = 5
 PICK_WINDOW_MINUTES = 20
 # Replays: over/under at the league line beat league rates in esb8 and volta6
 # (73% landed at 60%+), while model 1X2 and double-chance picks did worse than
-# simply taking the league's most common result. Top picks rank the likeliest
-# option in any market, and proven_edge says which of them had an edge.
+# simply taking the league's most common result. So the safest option is the
+# goals call wherever that edge applies, and top picks rank those first.
 TOP_PICK_MIN_PROBABILITY = .60
 TOP_PICKS = 2
 picks_lock = threading.Lock()
@@ -303,11 +303,11 @@ def safest_option(pick, winner, rates, over, over_rate, league):
                ("double_chance", "12 (no draw)", winner["1"] + winner["2"], rates["1"] + rates["2"]),
                ("over_under", f"{side} {pick['goals_line']}", max(over, 1 - over),
                 over_rate if side == "over" else 1 - over_rate)]
-    market, selection, probability, league_rate = max(options, key=lambda option: option[2])
+    proven = league in TRUSTED_GOAL_LEAGUES and pick["goals_call"] is not None
+    # A high "no draw" chance mostly mirrors the league's draw rate, so the proven goals call wins.
+    market, selection, probability, league_rate = options[-1] if proven else max(options, key=lambda option: option[2])
     return {"market": market, "selection": selection, "probability": round(probability, 4),
-            "league_rate": round(league_rate, 4),
-            "proven_edge": market == "over_under" and league in TRUSTED_GOAL_LEAGUES
-                           and pick["goals_call"] is not None}
+            "league_rate": round(league_rate, 4), "proven_edge": proven}
 
 
 def build_picks(feed, now):
@@ -421,7 +421,8 @@ def picks():
         leagues[key] = rows
     payload["leagues"] = leagues
     # ?top=N ranks every eligible game; by default only options at 60%+ qualify.
-    top = sorted(candidates, key=lambda row: row["probability"], reverse=True)[:top_count or TOP_PICKS]
+    # Proven goals calls come before other markets, then the likelier option.
+    top = sorted(candidates, key=lambda row: (row["proven_edge"], row["probability"]), reverse=True)[:top_count or TOP_PICKS]
     top_keys = {"league", "market", "selection", "probability", "league_rate", "proven_edge"}
     top = [{name: value for name, value in row.items() if (name in fields if fields is not None
             else name not in ("safest_option", "one_x_two", "double_chance")) or name in top_keys} for row in top]
