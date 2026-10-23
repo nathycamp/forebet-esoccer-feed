@@ -81,6 +81,9 @@ DELAY_MIN_FIXTURES = 2
 DELAY_MAX_SPREAD_MINUTES = 3
 DELAY_MAX_MINUTES = 45
 TOP_PICK_MIN_PROBABILITY = .60
+# GT12 scores swing more (frequent 10+ goal games), so it needs 65%: its 65%+
+# replay calls landed 72-77% against 52-60% league rates.
+LEAGUE_MIN_PROBABILITY = {"gt12": .65}
 # Replays: 60%+ calls landed 72% when each player's latest game was known, 67% when
 # it was not, so a pick waits until any earlier game of its players is half played.
 PREVIOUS_GAME_MIN_SHARE = .5
@@ -307,6 +310,20 @@ def matches_player(row, player):
                for side in ("home_tag", "away_tag"))
 
 
+def unique_fixtures(rows):
+    """One row per players + kickoff (Forebet sometimes lists a game twice under two club names)."""
+    rank = {"played": 0, "live": 1, "upcoming": 2}
+    best = {}
+    for row in rows:
+        try:
+            key = (tag(row["home_tag"]), tag(row["away_tag"]), parse_time(row["kickoff_utc"]))
+        except (KeyError, ValueError, TypeError, AttributeError):
+            continue
+        if key not in best or rank.get(row.get("status"), 3) < rank.get(best[key].get("status"), 3):
+            best[key] = row
+    return list(best.values())
+
+
 def league_totals(rows, now):
     totals = []
     for row in rows:
@@ -426,12 +443,12 @@ def previous_game(rows, pick, duration):
     return min(pending, key=lambda game: game["played_share"]) if pending else None
 
 
-def playable_options(goal_lines_table):
-    """Every over/under at 60%+ with the lowest odds worth taking (its fair odds)."""
+def playable_options(goal_lines_table, floor=TOP_PICK_MIN_PROBABILITY):
+    """Every over/under at the league's floor or above, with the lowest odds worth taking (its fair odds)."""
     options = []
     for line, chances in (goal_lines_table or {}).items():
         for side in ("over", "under"):
-            if chances[side] >= TOP_PICK_MIN_PROBABILITY and chances[f"fair_{side}_odds"]:
+            if chances[side] >= floor and chances[f"fair_{side}_odds"]:
                 options.append({"selection": f"{side} {line}", "probability": chances[side],
                                 "min_odds": chances[f"fair_{side}_odds"]})
     return sorted(options, key=lambda option: option["probability"], reverse=True)
@@ -455,6 +472,7 @@ def build_picks(feed, now):
             leagues[key] = {"status": "error"}
             continue
         diagnostics = forecasts["diagnostics"][key]
+        rows = unique_fixtures(rows)
         line, over_rate = league_goal_line(rows, now)
         totals = league_totals(rows, now)
         over_rates[key] = {str(goal_line): round(sum(total > goal_line for total in totals) / len(totals), 4)
@@ -505,7 +523,7 @@ def build_picks(feed, now):
                 if history >= MIN_PLAYER_GAMES:
                     pick["safest_option"] = safest_option(pick, winner, rates, over, over_rate, key)
                     if key in TRUSTED_GOAL_LEAGUES:
-                        pick["playable_options"] = playable_options(pick["goal_lines"])
+                        pick["playable_options"] = playable_options(pick["goal_lines"], min_probability(key))
             picks.append(pick)
         leagues[key] = picks
     return {"generated_at": forecasts["generated_at"], "source_fetched_at": feed["fetched_at"],
@@ -515,14 +533,18 @@ def build_picks(feed, now):
             "league_fetched_at": feed["league_fetched_at"], "leagues": leagues, "league_over_rates": over_rates}
 
 
-def play_advice(probability, proven, status="ok"):
-    """'play' only for proven-edge picks at 60%+; weaker or withheld ones say why to skip."""
+def min_probability(league):
+    return LEAGUE_MIN_PROBABILITY.get(league, TOP_PICK_MIN_PROBABILITY)
+
+
+def play_advice(probability, proven, status="ok", floor=TOP_PICK_MIN_PROBABILITY):
+    """'play' only for proven-edge picks at the league's floor (60%, GT12 65%); others say why to skip."""
     if status != "ok" and not status.startswith("no call: too close"):
         return f"skip ({status})"
     if probability is None:
         return "skip (no pick)"
-    if probability < TOP_PICK_MIN_PROBABILITY:
-        return f"skip (below {TOP_PICK_MIN_PROBABILITY:.0%})"
+    if probability < floor:
+        return f"skip (below {floor:.0%})"
     return "play" if proven else "skip (no proven edge)"
 
 
@@ -536,9 +558,10 @@ def base_advice(row, league, lines):
         best = row.get("best_available")
         if row["call_status"] == "no call: new players" or row["call_status"].startswith("withheld"):
             return play_advice(None, False, row["call_status"])
-        return play_advice(best and best["probability"], league in TRUSTED_GOAL_LEAGUES)
+        return play_advice(best and best["probability"], league in TRUSTED_GOAL_LEAGUES,
+                           floor=min_probability(league))
     return play_advice(row["goals_probability"] if row["goals_call"] else None,
-                       league in TRUSTED_GOAL_LEAGUES, row["call_status"])
+                       league in TRUSTED_GOAL_LEAGUES, row["call_status"], floor=min_probability(league))
 
 
 def parse_lines(value):
@@ -621,10 +644,10 @@ def picks():
                 # Only the offered lines count, so top picks rank the best of those.
                 candidates += [dict(row, league=key, market="over_under", proven_edge=key in TRUSTED_GOAL_LEAGUES,
                                     **row["best_available"]) for row in rows if row["best_available"]
-                               and (top_count or row["best_available"]["probability"] >= TOP_PICK_MIN_PROBABILITY)]
+                               and (top_count or row["best_available"]["probability"] >= min_probability(key))]
             else:
                 candidates += [dict(row, league=key, **row["safest_option"]) for row in rows if row["safest_option"]
-                               and (top_count or row["safest_option"]["probability"] >= TOP_PICK_MIN_PROBABILITY)]
+                               and (top_count or row["safest_option"]["probability"] >= min_probability(key))]
             for row in rows:
                 row["advice"] = row_advice(row, key, lines)
             if limit is not None:
@@ -637,11 +660,12 @@ def picks():
     # Proven goals calls come before other markets, then the likelier option.
     top = sorted(candidates, key=lambda row: (row["proven_edge"], row["probability"]), reverse=True)[:top_count or TOP_PICKS]
     for row in top:
-        row["advice"] = play_advice(row["probability"], row["proven_edge"])
+        row["advice"] = play_advice(row["probability"], row["proven_edge"], floor=min_probability(row["league"]))
+        row["min_probability"] = min_probability(row["league"])
         if row["advice"] == "play" and waiting(row):
             row["advice"] = "wait (previous game pending)"
     top_keys = {"league", "market", "selection", "probability", "league_rate", "proven_edge", "fair_odds", "advice",
-                "playable_options", "previous_game"}
+                "playable_options", "previous_game", "min_probability"}
     top = [{name: value for name, value in row.items() if (name in fields if fields is not None
             else name not in ("safest_option", "one_x_two", "double_chance")) or name in top_keys} for row in top]
     payload["top_picks"] = top
@@ -753,13 +777,14 @@ def choose():
         else:
             best = max(options, key=lambda option: option["probability"])
             advice = f"take {best['selection']} only at odds above {best['fair_odds']}"
-            if best["probability"] < TOP_PICK_MIN_PROBABILITY:
+            if best["probability"] < min_probability(league):
                 advice = f"close call ({best['probability']:.0%}): skip unless {best['selection']} pays well above {best['fair_odds']}"
     elif usable:
         advice = "no goal lines available for this game"
     result = {name: pick.get(name) for name in ("home_tag", "away_tag", "kickoff_utc", "call_status", "expected_goals",
                                                 "goals_line", "goals_call", "goals_probability", "warnings")}
     result.update({"league": league, "proven_edge": league in TRUSTED_GOAL_LEAGUES,
+                   "min_probability": min_probability(league),
                    "options": sorted(options, key=lambda option: option.get("value", option["probability"]), reverse=True),
                    "best": best, "advice": advice, "source_fetched_at": payload["source_fetched_at"],
                    "generated_at": payload["generated_at"]})

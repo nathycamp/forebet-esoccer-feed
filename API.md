@@ -111,7 +111,8 @@ or `null` with `no bet` advice when none beats its fair odds. `best` is `null`
 when the game's picks are withheld or the players are new.
 
 Every pick and top pick has `advice`: `play` only for a proven-edge pick
-(esb8/volta6/gt12 goals) at 60% or more, otherwise `skip (below 60%)`,
+(esb8/volta6/gt12 goals) at 60% or more (65% for gt12, whose scores swing more),
+otherwise `skip (below 60%)` / `skip (below 65%)`,
 `skip (no proven edge)` or `skip (<reason>)` when the call is withheld. With
 `lines=`, advice follows `best_available`. `?top=N` still lists N games, so
 read `advice` before playing them.
@@ -122,7 +123,7 @@ played, `advice` is `wait (previous game pending)` and `/picks/choose` returns
 no `best`; replays showed 60%+ calls landing 72% with that game known versus
 67% without it.
 
-`playable_options` lists every over/under at 60%+ as `{selection, probability,
+`playable_options` lists every over/under at the league's floor (60%, gt12 65%) as `{selection, probability,
 min_odds}` (min_odds = fair odds), best chance first, for esb8/volta6/gt12 picks. A
 client can decide locally: among options whose bookmaker odds exceed
 `min_odds`, take the highest `probability * odds - 1`.

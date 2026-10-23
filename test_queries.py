@@ -6,6 +6,7 @@ from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
 
 import app
+from prediction_engine.validation import clean_rows
 
 
 class QueryTests(unittest.TestCase):
@@ -322,6 +323,23 @@ class PicksTests(unittest.TestCase):
         self.assertEqual(options[0]['min_odds'], alice['goal_lines'][line][f'fair_{side}_odds'])
         self.assertEqual([o['probability'] for o in options], sorted((o['probability'] for o in options), reverse=True))
 
+    def test_gt12_needs_sixty_five_percent(self):
+        self.assertEqual(app.min_probability('gt12'), .65)
+        self.assertEqual(app.min_probability('esb8'), .60)
+        self.assertEqual(app.play_advice(.62, True, floor=app.min_probability('gt12')), 'skip (below 65%)')
+        self.assertEqual(app.play_advice(.62, True, floor=app.min_probability('esb8')), 'play')
+        gt12 = self.client.get('/picks?league=gt12').get_json()['leagues']['gt12'][0]
+        self.assertTrue(all(o['probability'] >= .65 for o in gt12['playable_options']))
+        if gt12['goals_call'] and gt12['goals_probability'] < .65:
+            self.assertEqual(gt12['advice'], 'skip (below 65%)')
+
+    def test_relabelled_club_does_not_double_a_result(self):
+        row = dict(self.rows[0], home_club='FC Salzburg')
+        twin = dict(row, home_club='RB Salzburg')
+        rows, errors = clean_rows([row, twin])
+        self.assertEqual((len(rows), errors), (1, []))
+        self.assertEqual(len(app.unique_fixtures([row, twin, dict(twin, status='upcoming')])), 1)
+
     def test_goal_lines_give_every_line_with_fair_odds(self):
         pick = self.client.get('/picks?league=esb8').get_json()['leagues']['esb8'][0]
         lines = pick['goal_lines']
@@ -356,7 +374,8 @@ class PicksTests(unittest.TestCase):
         result = self.client.get('/picks?top=1&league=volta6&fields=home_tag,kickoff_utc').get_json()
         self.assertEqual(set(result['top_picks'][0]), {'home_tag', 'kickoff_utc', 'league', 'market', 'selection',
                                                        'probability', 'league_rate', 'proven_edge', 'advice',
-                                                       'fair_odds', 'playable_options', 'previous_game'})
+                                                       'fair_odds', 'playable_options', 'previous_game',
+                                                       'min_probability'})
         self.assertEqual(result['top_picks'][0]['league'], 'volta6')
         for query in ('top=0', 'top=11', 'top=x', 'top=1&top=2'):
             with self.subTest(query=query):

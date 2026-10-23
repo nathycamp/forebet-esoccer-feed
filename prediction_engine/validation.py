@@ -18,8 +18,10 @@ def utc(value):
 def identity(row):
     if row.get("fixture_id"):
         return str(row["fixture_id"])
-    return tuple(row[key].casefold().strip() for key in
-                 ("home_tag", "away_tag", "home_club", "away_club", "kickoff_utc"))
+    # Players and kickoff identify a game; Forebet sometimes relabels a club
+    # (Crysis appeared as both "FC Salzburg" and "RB Salzburg"), which must not
+    # turn one result into two.
+    return tuple(row[key].casefold().strip() for key in ("home_tag", "away_tag", "kickoff_utc"))
 
 
 def clean_rows(rows):

@@ -90,8 +90,9 @@ def advice_text(choice, bank, min_stake):
     header = f"<b>{choice['home_tag']} v {choice['away_tag']}</b> · kickoff {wat(choice['kickoff_utc'])} WAT\n"
     if choice.get("best") is None and not choice.get("options"):
         return header + f"⛔ No bet: {choice.get('advice')}"
+    floor = choice.get("min_probability", MIN_PROBABILITY)
     playable = [option for option in choice.get("options", [])
-                if option.get("value", 0) > 0 and option["probability"] >= MIN_PROBABILITY]
+                if option.get("value", 0) > 0 and option["probability"] >= floor]
     rows = "\n".join(
         f"{'✅' if option in playable else '·'} {option['selection']} @ {option.get('odds', '-')}: "
         f"{option['probability']:.0%}, fair {option['fair_odds']}, value {option.get('value', 0):+.0%}"
@@ -99,7 +100,7 @@ def advice_text(choice, bank, min_stake):
     if choice.get("call_status", "ok") != "ok" and not choice["call_status"].startswith("no call: too close"):
         return header + rows + f"\n⛔ No bet: {choice['call_status']}"
     if not playable:
-        return header + rows + "\n⛔ <b>No bet</b>: no option is both 60%+ and above its fair odds"
+        return header + rows + f"\n⛔ <b>No bet</b>: no option is both {floor:.0%}+ and above its fair odds"
     best = max(playable, key=lambda option: option["value"])
     stake = kelly_stake(best["probability"], best["odds"], bank)
     if not bank:
