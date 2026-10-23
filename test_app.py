@@ -52,6 +52,16 @@ class ReaderServiceTests(unittest.TestCase):
             reader.drop_free_proxy("http://b:2")
             self.assertEqual(reader.load_free_proxy_pool(), ["http://c:3", "http://a:1"])
 
+    def test_games_never_go_backwards(self):
+        live = {"home_tag": "A", "away_tag": "B", "kickoff_utc": "2026-10-23T18:44:00+00:00",
+                "status": "live", "live_score": "1-0", "match_clock": "3"}
+        reverted = dict(live, status="upcoming", live_score=None, match_clock=None)
+        later = dict(live, status="played", actual_score="2-0", live_score=None)
+        other = dict(reverted, home_tag="C")
+        self.assertEqual(app.keep_progress([reverted, other], [live]), [live, other])
+        self.assertEqual(app.keep_progress([later], [live]), [later])
+        self.assertEqual(app.keep_progress([reverted], [later]), [later])
+
     def test_older_forebet_page_does_not_replace_newer_data(self):
         def page(*kickoffs):
             return {"status": "ok", "fixtures": [{"home_tag": "A", "away_tag": "B", "status": "played",

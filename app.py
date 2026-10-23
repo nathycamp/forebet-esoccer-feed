@@ -176,6 +176,23 @@ def run_reader():
     return json.loads(output)
 
 
+PROGRESS = {"upcoming": 0, "live": 1, "played": 2}
+
+
+def keep_progress(fixtures, previous):
+    """Never let a game go backwards: Forebet sometimes shows a game it already had
+    live (or finished) as upcoming again, which would stall the previous-game wait."""
+    seen = {(row.get("home_tag"), row.get("away_tag"), row.get("kickoff_utc")): row for row in previous}
+    kept = []
+    for row in fixtures:
+        earlier = seen.get((row.get("home_tag"), row.get("away_tag"), row.get("kickoff_utc")))
+        if earlier and PROGRESS.get(earlier.get("status"), 0) > PROGRESS.get(row.get("status"), 0):
+            kept.append(earlier)
+        else:
+            kept.append(row)
+    return kept
+
+
 def latest_result(page):
     """Kickoff of the newest finished game on a league page ('' when none)."""
     return max((row.get("kickoff_utc", "") for row in (page or {}).get("fixtures", [])
@@ -208,6 +225,8 @@ def refresh_pages():
         with cache_lock:
             for key, page in successful.items():
                 previous = cache["leagues"].get(key)
+                if previous:
+                    page["fixtures"] = keep_progress(page["fixtures"], previous["fixtures"])
                 page["fetched_at"] = page.get("fetched_at", completed_at)
                 page["changed_at"] = (
                     previous.get("changed_at", page["fetched_at"])
