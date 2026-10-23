@@ -110,6 +110,12 @@ priced option with the highest expected return (`value` = chance x odds - 1),
 or `null` with `no bet` advice when none beats its fair odds. `best` is `null`
 when the game's picks are withheld or the players are new.
 
+Every pick and top pick has `advice`: `play` only for a proven-edge pick
+(esb8/volta6 goals) at 60% or more, otherwise `skip (below 60%)`,
+`skip (no proven edge)` or `skip (<reason>)` when the call is withheld. With
+`lines=`, advice follows `best_available`. `?top=N` still lists N games, so
+read `advice` before playing them.
+
 `top_picks` lists up to two games whose safest option is at least 60%, proven
 over/under calls first and then the likeliest, each with its `league` and safest-option fields.
 `top_picks_status` is `no top pick right now` when nothing qualifies.

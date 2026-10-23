@@ -49,6 +49,7 @@ PICK_FIELDS = {
     "favourite_strength", "call_status", "warnings",
     "one_x_two", "double_chance", "winner_markets_trust", "safest_option",
     "goal_lines", "kickoff_adjusted_minutes", "listed_kickoff_utc", "best_available",
+    "advice",
 }
 GOAL_LINES = [line + .5 for line in range(1, 10)]
 # Picking the likeliest of the lines a bookmaker shows (e.g. 4.5 and 5.5) also
@@ -440,6 +441,27 @@ def build_picks(feed, now):
             "league_fetched_at": feed["league_fetched_at"], "leagues": leagues, "league_over_rates": over_rates}
 
 
+def play_advice(probability, proven, status="ok"):
+    """'play' only for proven-edge picks at 60%+; weaker or withheld ones say why to skip."""
+    if status != "ok" and not status.startswith("no call: too close"):
+        return f"skip ({status})"
+    if probability is None:
+        return "skip (no pick)"
+    if probability < TOP_PICK_MIN_PROBABILITY:
+        return f"skip (below {TOP_PICK_MIN_PROBABILITY:.0%})"
+    return "play" if proven else "skip (no proven edge)"
+
+
+def row_advice(row, league, lines):
+    if lines:
+        best = row.get("best_available")
+        if row["call_status"] == "no call: new players" or row["call_status"].startswith("withheld"):
+            return play_advice(None, False, row["call_status"])
+        return play_advice(best and best["probability"], league in TRUSTED_GOAL_LEAGUES)
+    return play_advice(row["goals_probability"] if row["goals_call"] else None,
+                       league in TRUSTED_GOAL_LEAGUES, row["call_status"])
+
+
 def parse_lines(value):
     """?lines=4.5,5.5: the x.5 goal lines a bookmaker offers."""
     try:
@@ -524,6 +546,8 @@ def picks():
             else:
                 candidates += [dict(row, league=key, **row["safest_option"]) for row in rows if row["safest_option"]
                                and (top_count or row["safest_option"]["probability"] >= TOP_PICK_MIN_PROBABILITY)]
+            for row in rows:
+                row["advice"] = row_advice(row, key, lines)
             if limit is not None:
                 rows = rows[:limit]
             if fields is not None:
@@ -533,7 +557,9 @@ def picks():
     # ?top=N ranks every eligible game; by default only options at 60%+ qualify.
     # Proven goals calls come before other markets, then the likelier option.
     top = sorted(candidates, key=lambda row: (row["proven_edge"], row["probability"]), reverse=True)[:top_count or TOP_PICKS]
-    top_keys = {"league", "market", "selection", "probability", "league_rate", "proven_edge", "fair_odds"}
+    for row in top:
+        row["advice"] = play_advice(row["probability"], row["proven_edge"])
+    top_keys = {"league", "market", "selection", "probability", "league_rate", "proven_edge", "fair_odds", "advice"}
     top = [{name: value for name, value in row.items() if (name in fields if fields is not None
             else name not in ("safest_option", "one_x_two", "double_chance")) or name in top_keys} for row in top]
     payload["top_picks"] = top
