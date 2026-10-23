@@ -17,6 +17,7 @@ from pathlib import Path
 from apscheduler.schedulers.background import BackgroundScheduler
 from flask import Flask, Response, jsonify, request
 
+import telegram_bot
 from prediction_engine import MODEL_VERSION, predict_feed
 from reader import LEAGUES, demote_last_proxy, load_free_proxy_pool, refresh_free_proxy_pool
 
@@ -345,6 +346,7 @@ def safest_option(pick, winner, rates, over, over_rate, league):
     # A high "no draw" chance mostly mirrors the league's draw rate, so the proven goals call wins.
     market, selection, probability, league_rate = options[-1] if proven else max(options, key=lambda option: option[2])
     return {"market": market, "selection": selection, "probability": round(probability, 4),
+            "fair_odds": round(1 / probability, 2) if probability else None,
             "league_rate": round(league_rate, 4), "proven_edge": proven}
 
 
@@ -726,6 +728,7 @@ def start_scheduler():
             id="free-proxy-pool",
         )
     scheduler.start()
+    telegram_bot.start(app.test_client(), scheduler)
     return scheduler
 
 

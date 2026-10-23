@@ -321,7 +321,8 @@ class PicksTests(unittest.TestCase):
         self.assertGreaterEqual((top[0]['proven_edge'], top[0]['probability']), (top[1]['proven_edge'], top[1]['probability']))
         result = self.client.get('/picks?top=1&league=volta6&fields=home_tag,kickoff_utc').get_json()
         self.assertEqual(set(result['top_picks'][0]), {'home_tag', 'kickoff_utc', 'league', 'market', 'selection',
-                                                       'probability', 'league_rate', 'proven_edge', 'advice'})
+                                                       'probability', 'league_rate', 'proven_edge', 'advice',
+                                                       'fair_odds'})
         self.assertEqual(result['top_picks'][0]['league'], 'volta6')
         for query in ('top=0', 'top=11', 'top=x', 'top=1&top=2'):
             with self.subTest(query=query):
