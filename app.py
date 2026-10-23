@@ -37,6 +37,9 @@ cache = {
 }
 MAX_CACHE_AGE_SECONDS = 6 * 60
 READER_TIMEOUT_SECONDS = int(os.environ.get("READER_TIMEOUT_SECONDS", "100"))
+# Picks flip from "wait" to "play" only 2-4 minutes before kickoff, so read every minute.
+READER_INTERVAL_SECONDS = int(os.environ.get("READER_INTERVAL_SECONDS", "60"))
+after_refresh = []  # callables run right after each read, e.g. Telegram alerts
 proxy_session_id = uuid.uuid4().hex[:12]
 FIXTURE_FIELDS = {
     "home_tag", "away_tag", "home_club", "away_club", "kickoff_utc",
@@ -761,12 +764,21 @@ def choose():
     return feed_response(result)
 
 
+def refresh_and_notify():
+    refresh_pages()
+    for hook in after_refresh:
+        try:
+            hook()
+        except Exception:
+            logger.exception("After-refresh hook failed")
+
+
 def start_scheduler():
     scheduler = BackgroundScheduler(daemon=True, timezone="UTC")
     scheduler.add_job(
-        refresh_pages,
+        refresh_and_notify,
         "interval",
-        minutes=2,
+        seconds=READER_INTERVAL_SECONDS,
         next_run_time=datetime.now(timezone.utc),
         max_instances=1,
         coalesce=True,
@@ -784,7 +796,9 @@ def start_scheduler():
             id="free-proxy-pool",
         )
     scheduler.start()
-    telegram_bot.start(app.test_client(), scheduler)
+    bot = telegram_bot.start(app.test_client(), scheduler)
+    if bot:
+        after_refresh.append(bot.check_alerts)
     return scheduler
 
 

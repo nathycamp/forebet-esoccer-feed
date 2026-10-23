@@ -253,8 +253,8 @@ class PickBot:
                 time.sleep(10)
 
 
-def start(client, scheduler):
-    """Start alerts and command polling when TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID are set."""
+def start(client, scheduler=None):
+    """Start command polling when TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID are set; returns the bot."""
     token, chat_id = os.environ.get("TELEGRAM_BOT_TOKEN"), os.environ.get("TELEGRAM_CHAT_ID")
     if not token or not chat_id:
         logger.info("Telegram bot off: set TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID")
@@ -264,13 +264,8 @@ def start(client, scheduler):
                   lines=os.environ.get("TELEGRAM_LINES") or None,
                   min_stake=float(os.environ.get("TELEGRAM_MIN_STAKE", "100")))
 
-    def alerts():
-        try:
-            bot.check_alerts()
-        except Exception:
-            logger.exception("Telegram alert check failed")
-
-    scheduler.add_job(alerts, "interval", minutes=1, max_instances=1, coalesce=True, id="telegram-alerts")
+    # Alerts run right after each feed read (app.after_refresh), so a pick that turns
+    # "play" is sent within seconds of the read that shows it.
     threading.Thread(target=bot.poll_forever, name="telegram-poll", daemon=True).start()
     logger.info("Telegram bot on for chat %s", chat_id)
     return bot

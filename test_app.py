@@ -70,6 +70,16 @@ class ReaderServiceTests(unittest.TestCase):
             self.assertEqual(app.latest_result(app.cache["leagues"]["volta6"]), "2026-10-23T10:14:00+00:00")
             self.assertTrue(app.cache["stale"])
 
+    def test_hooks_run_right_after_each_read_even_if_one_fails(self):
+        calls = []
+        def broken():
+            raise RuntimeError("boom")
+        with patch.object(app, "refresh_pages", side_effect=lambda: calls.append("read")), \
+                patch.object(app, "after_refresh", [broken, lambda: calls.append("alert")]), \
+                self.assertLogs(app.logger, level="ERROR"):
+            app.refresh_and_notify()
+        self.assertEqual(calls, ["read", "alert"])
+
     def test_health_and_structured_fixtures(self):
         with app.app.test_client() as client, patch.object(app, "load_free_proxy_pool", return_value=["http://1.2.3.4:80"] * 5):
             self.assertEqual(client.get("/").get_json(), {
