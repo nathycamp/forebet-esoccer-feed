@@ -21,6 +21,24 @@ class FormattingTests(unittest.TestCase):
                          "• UNDER 7.5 goals — 71% — odds above 1.41")
         self.assertEqual(telegram_bot.other_options([], "over 4.5"), "")
 
+    def test_board_text_shows_ready_and_waiting_games(self):
+        board = [{"league": "gt12", "kickoff_utc": "2026-10-23T19:15:00+00:00", "home_tag": "David", "away_tag": "Eros",
+                  "selection": "under 5.5", "probability": .77, "fair_odds": 1.3, "edge": .08, "advice": "play"},
+                 {"league": "esb8", "kickoff_utc": "2026-10-23T19:31:00+00:00", "home_tag": "Sena", "away_tag": "Mani",
+                  "selection": "over 4.5", "probability": .65, "fair_odds": 1.54, "edge": .04,
+                  "advice": "wait (previous game pending)"},
+                 {"league": "h2hgg", "kickoff_utc": "2026-10-23T19:16:00+00:00", "home_tag": "A", "away_tag": "B",
+                  "selection": None, "probability": None, "fair_odds": None, "edge": None,
+                  "advice": "skip (no call: new players)"}]
+        text = telegram_bot.board_text(board)
+        self.assertIn("BET NOW", text)
+        self.assertIn("David vs Eros", text)
+        self.assertIn("edge +8", text)
+        self.assertIn("wait", text)
+        self.assertIn("1 other game skipped", text)
+        self.assertIn("No game to bet", telegram_bot.board_text(board[2:]))
+        self.assertIn("No games", telegram_bot.board_text([]))
+
     def test_odds_text_is_read_in_any_common_form(self):
         self.assertEqual(telegram_bot.parse_odds_text("o4.5 1.55 u5.5:1.70 Over 6.5 @2.1"),
                          "over4.5:1.55,under5.5:1.70,over6.5:2.1")
@@ -84,6 +102,7 @@ class BotTests(unittest.TestCase):
         self.assertIn("best line", self.bot.handle(self.message("/lines off")))
         self.assertIn("Reply to a BET ALERT", self.bot.handle(self.message("o4.5 1.8")))
         self.assertIn("/top", self.bot.handle(self.message("/help")))
+        self.assertIn("Games in the next 20 min", self.bot.handle(self.message("/top")))
         self.assertIsNone(self.bot.handle(self.message("thanks")))
 
 

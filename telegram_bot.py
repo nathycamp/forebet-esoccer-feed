@@ -131,25 +131,28 @@ def advice_text(choice, bank, min_stake):
             + checked_text)
 
 
-def top_text(picks):
-    if not picks:
-        return "No pick right now."
+def board_text(board, limit=8):
+    """The /top board: every game ready or waiting, best edge first, plus a count of skips."""
+    ready = [row for row in board if row.get("selection") and not row["advice"].startswith("skip")][:limit]
+    skipped = sum(row["advice"].startswith("skip") for row in board)
+    if not ready:
+        return f"No game to bet right now ({skipped} skipped)." if board else "No games in the next 20 minutes."
     blocks = []
-    for pick in picks:
-        state = {"play": "✅ ready to bet"}.get(pick.get("advice"), pick.get("advice", ""))
-        if pick.get("advice", "").startswith("wait"):
-            state = "⏳ wait — previous game not at half time yet"
-        blocks.append(f"⚽ {LEAGUE_NAMES.get(pick['league'], pick['league'])} — {wat(pick['kickoff_utc'])}\n"
-                      f"👥 <b>{pick['home_tag']} vs {pick['away_tag']}</b>\n"
-                      f"{bet_name(pick['selection'])} — {pick['probability']:.0%} — odds above {pick['fair_odds']}\n"
-                      f"{state}")
-    return "\n\n".join(blocks)
+    for row in ready:
+        state = "✅ BET NOW" if row["advice"] == "play" else "⏳ wait (previous game not at half time)"
+        edge = f" · edge {row['edge'] * 100:+.0f}" if row.get("edge") is not None else ""
+        blocks.append(f"{state}\n⚽ {LEAGUE_NAMES.get(row['league'], row['league'])} — {wat(row['kickoff_utc'])}\n"
+                      f"👥 <b>{row['home_tag']} vs {row['away_tag']}</b>\n"
+                      f"{bet_name(row['selection'])} — {row['probability']:.0%}{edge}"
+                      + (f" — odds above {row['fair_odds']}" if row.get("fair_odds") else ""))
+    footer = f"\n\n({skipped} other game{'s' if skipped != 1 else ''} skipped: too close, new players or low chance)" if skipped else ""
+    return "📋 <b>Games in the next 20 min</b>\n\n" + "\n\n".join(blocks) + footer
 
 
 HELP = ("I post a <b>BET ALERT</b> when a game is ready to bet, 2–20 min before kickoff.\n\n"
         "↩️ Reply to an alert with the odds you see, e.g. <code>u5.5 1.50 o3.5 1.55</code>, "
         "and I'll say which to bet, or that none is good enough.\n\n"
-        "/top — the current best picks\n"
+        "/top — every game in the next 20 min: bet now, wait or skipped\n"
         "/help — this message\n"
         "Owner only: /bank 5000 (bankroll for stakes), /lines 4.5,5.5 (/lines off)")
 
@@ -255,7 +258,11 @@ class PickBot:
             self.lines = value
             return f"Alerts now pick from lines {value}."
         if command == "/top":
-            return top_text(self.top_picks())
+            params = {"lines": self.lines} if self.lines else {}
+            status, payload = self.get("/picks", **params)
+            if status != 200:
+                return "The feed is unavailable right now; try again in a minute."
+            return board_text(payload.get("board", []))
         odds = parse_odds_text(text)
         if not odds:
             return "Send odds like <code>u5.5 1.50</code>, or /help" if command else None
