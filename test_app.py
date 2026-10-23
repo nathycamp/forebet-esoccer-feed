@@ -30,6 +30,20 @@ class ReaderServiceTests(unittest.TestCase):
         self.assertEqual(servers, ["http://h:1", "socks5://1.1.1.1:1", "http://2.2.2.2:2", "http://3.3.3.3:3"])
         fetch.assert_not_called()
 
+    def test_older_forebet_page_does_not_replace_newer_data(self):
+        def page(*kickoffs):
+            return {"status": "ok", "fixtures": [{"home_tag": "A", "away_tag": "B", "status": "played",
+                                                  "actual_score": "1-0", "kickoff_utc": k} for k in kickoffs]}
+        newer = {key: page("2026-10-23T10:14:00+00:00") for key in app.LEAGUES}
+        with patch.object(app, "run_reader", return_value=newer):
+            app.refresh_pages()
+        older = dict(newer, volta6=page("2026-10-23T09:29:00+00:00"))
+        with patch.object(app, "run_reader", return_value=older), self.assertLogs(app.logger, level="WARNING"):
+            app.refresh_pages()
+        with app.cache_lock:
+            self.assertEqual(app.latest_result(app.cache["leagues"]["volta6"]), "2026-10-23T10:14:00+00:00")
+            self.assertTrue(app.cache["stale"])
+
     def test_health_and_structured_fixtures(self):
         with app.app.test_client() as client, patch.object(app, "load_free_proxy_pool", return_value=["http://1.2.3.4:80"] * 5):
             self.assertEqual(client.get("/").get_json(), {

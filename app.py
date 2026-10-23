@@ -162,6 +162,12 @@ def run_reader():
     return json.loads(output)
 
 
+def latest_result(page):
+    """Kickoff of the newest finished game on a league page ('' when none)."""
+    return max((row.get("kickoff_utc", "") for row in (page or {}).get("fixtures", [])
+                if row.get("status") == "played"), default="")
+
+
 def refresh_pages():
     global proxy_session_id
     attempted_at = now_utc()
@@ -169,6 +175,15 @@ def refresh_pages():
         results = run_reader()
         completed_at = now_utc()
         successful = {key: page for key, page in results.items() if page.get("status") == "ok"}
+        with cache_lock:
+            # Forebet sometimes serves an older copy of a page; a read whose newest
+            # result predates the cached one is dropped so it cannot roll data back.
+            for key in list(successful):
+                previous = cache["leagues"].get(key)
+                if previous and latest_result(successful[key]) < latest_result(previous):
+                    logger.warning("Ignoring stale Forebet %s page: newest result %s is older than %s",
+                                   key, latest_result(successful[key]), latest_result(previous))
+                    del successful[key]
         complete = len(successful) == len(LEAGUES)
         with cache_lock:
             for key, page in successful.items():
