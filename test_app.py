@@ -42,6 +42,8 @@ class ReaderServiceTests(unittest.TestCase):
             self.assertEqual(reader.demote_last_proxy(), "http://a:1")
             self.assertEqual(reader.load_free_proxy_pool(), ["http://b:2", "http://c:3", "http://a:1"])
             self.assertIsNone(reader.demote_last_proxy())
+            reader.drop_free_proxy("http://b:2")
+            self.assertEqual(reader.load_free_proxy_pool(), ["http://c:3", "http://a:1"])
 
     def test_older_forebet_page_does_not_replace_newer_data(self):
         def page(*kickoffs):

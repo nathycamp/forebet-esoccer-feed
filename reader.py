@@ -427,6 +427,8 @@ def proxy_candidates():
             servers.append(handle.read().strip())
     except OSError:
         pass
+    # FREE_PROXY_SEEDS lists proxies known to clear Cloudflare; they survive redeploys.
+    servers += [seed.strip() for seed in os.environ.get("FREE_PROXY_SEEDS", "").split(",") if seed.strip()]
     servers += load_free_proxy_pool()
     if len(set(filter(None, servers))) < MAX_PROXY_ATTEMPTS:
         try:
@@ -435,6 +437,16 @@ def proxy_candidates():
             logger.exception("Could not load the free proxy list")
     for server in list(dict.fromkeys(filter(None, servers)))[:MAX_PROXY_ATTEMPTS]:
         yield {"server": server}
+
+
+def drop_free_proxy(server):
+    """Remove a free proxy that failed in Chrome, so later cycles try others."""
+    pool = load_free_proxy_pool()
+    if server in pool:
+        temporary = FREE_PROXY_POOL_FILE + ".tmp"
+        with open(temporary, "w") as handle:
+            json.dump([other for other in pool if other != server], handle)
+        os.replace(temporary, FREE_PROXY_POOL_FILE)
 
 
 def demote_last_proxy():
@@ -521,6 +533,8 @@ def read_pages():
                         if blocking and not early:
                             block()
                     except Exception:
+                        if "username" not in proxy:
+                            drop_free_proxy(proxy["server"])
                         if can_retry:
                             logger.warning("Homepage failed through %s; trying the next proxy",
                                            proxy["server"].rsplit("@", 1)[-1], exc_info=True)
