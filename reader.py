@@ -437,6 +437,25 @@ def proxy_candidates():
         yield {"server": server}
 
 
+def demote_last_proxy():
+    """Stop reusing the last free proxy: it is moved to the back of the pool."""
+    try:
+        with open(LAST_PROXY_FILE) as handle:
+            server = handle.read().strip()
+        os.remove(LAST_PROXY_FILE)
+    except OSError:
+        return None
+    pool = load_free_proxy_pool()
+    if server in pool:
+        pool = [other for other in pool if other != server] + [server]
+        temporary = FREE_PROXY_POOL_FILE + ".tmp"
+        with open(temporary, "w") as handle:
+            json.dump(pool, handle)
+        os.replace(temporary, FREE_PROXY_POOL_FILE)
+    logger.info("Switching away from free proxy %s after an old Forebet page", server)
+    return server
+
+
 def remember_proxy(server):
     try:
         if server:

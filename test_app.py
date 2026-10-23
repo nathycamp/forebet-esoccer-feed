@@ -30,6 +30,19 @@ class ReaderServiceTests(unittest.TestCase):
         self.assertEqual(servers, ["http://h:1", "socks5://1.1.1.1:1", "http://2.2.2.2:2", "http://3.3.3.3:3"])
         fetch.assert_not_called()
 
+    def test_demoted_proxy_moves_to_back_of_pool(self):
+        import json, tempfile
+        folder = tempfile.mkdtemp()
+        last, pool = f"{folder}/last", f"{folder}/pool.json"
+        with open(last, "w") as handle:
+            handle.write("http://a:1")
+        with open(pool, "w") as handle:
+            json.dump(["http://a:1", "http://b:2", "http://c:3"], handle)
+        with patch.object(reader, "LAST_PROXY_FILE", last), patch.object(reader, "FREE_PROXY_POOL_FILE", pool):
+            self.assertEqual(reader.demote_last_proxy(), "http://a:1")
+            self.assertEqual(reader.load_free_proxy_pool(), ["http://b:2", "http://c:3", "http://a:1"])
+            self.assertIsNone(reader.demote_last_proxy())
+
     def test_older_forebet_page_does_not_replace_newer_data(self):
         def page(*kickoffs):
             return {"status": "ok", "fixtures": [{"home_tag": "A", "away_tag": "B", "status": "played",
@@ -38,8 +51,12 @@ class ReaderServiceTests(unittest.TestCase):
         with patch.object(app, "run_reader", return_value=newer):
             app.refresh_pages()
         older = dict(newer, volta6=page("2026-10-23T09:29:00+00:00"))
-        with patch.object(app, "run_reader", return_value=older), self.assertLogs(app.logger, level="WARNING"):
+        session = app.proxy_session_id
+        with patch.object(app, "run_reader", return_value=older), patch.object(app, "demote_last_proxy") as demote, \
+                self.assertLogs(app.logger, level="WARNING"):
             app.refresh_pages()
+        demote.assert_called_once()
+        self.assertNotEqual(app.proxy_session_id, session)
         with app.cache_lock:
             self.assertEqual(app.latest_result(app.cache["leagues"]["volta6"]), "2026-10-23T10:14:00+00:00")
             self.assertTrue(app.cache["stale"])

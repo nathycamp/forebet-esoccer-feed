@@ -18,7 +18,7 @@ from apscheduler.schedulers.background import BackgroundScheduler
 from flask import Flask, Response, jsonify, request
 
 from prediction_engine import MODEL_VERSION, predict_feed
-from reader import LEAGUES, load_free_proxy_pool, refresh_free_proxy_pool
+from reader import LEAGUES, demote_last_proxy, load_free_proxy_pool, refresh_free_proxy_pool
 
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -175,6 +175,7 @@ def refresh_pages():
         results = run_reader()
         completed_at = now_utc()
         successful = {key: page for key, page in results.items() if page.get("status") == "ok"}
+        stale_pages = False
         with cache_lock:
             # Forebet sometimes serves an older copy of a page; a read whose newest
             # result predates the cached one is dropped so it cannot roll data back.
@@ -184,6 +185,11 @@ def refresh_pages():
                     logger.warning("Ignoring stale Forebet %s page: newest result %s is older than %s",
                                    key, latest_result(successful[key]), latest_result(previous))
                     del successful[key]
+                    stale_pages = True
+        if stale_pages:
+            # Old copies seem tied to the route, so the next read goes another way.
+            proxy_session_id = uuid.uuid4().hex[:12]
+            demote_last_proxy()
         complete = len(successful) == len(LEAGUES)
         with cache_lock:
             for key, page in successful.items():
