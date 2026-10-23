@@ -99,6 +99,17 @@ lines, with `selection`, `probability`, `fair_odds` and the league's
 of over/under 4.5 and 5.5 landed 71% (volta6) and 75% (esb8) of the time,
 against 59-60% for the same picks across the league.
 
+### Choosing among a bookmaker's options
+
+`GET /picks/choose?league=esb8&home=JKey&away=DangerDim77&lines=4.5,5.5`
+returns every over/under at the offered lines for the next game between those
+players, with `probability`, `fair_odds` and `league_rate`, plus `best` and a
+plain `advice`. Add prices with `odds=over4.5:1.85,under5.5:1.70` (selections
+may be written `over4.5`, `under 5.5`, `o4.5` or `u5.5`): `best` is then the
+priced option with the highest expected return (`value` = chance x odds - 1),
+or `null` with `no bet` advice when none beats its fair odds. `best` is `null`
+when the game's picks are withheld or the players are new.
+
 `top_picks` lists up to two games whose safest option is at least 60%, proven
 over/under calls first and then the likeliest, each with its `league` and safest-option fields.
 `top_picks_status` is `no top pick right now` when nothing qualifies.

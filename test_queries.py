@@ -247,6 +247,32 @@ class PicksTests(unittest.TestCase):
             with self.subTest(query=query):
                 self.assertEqual(self.client.get('/picks?'+query).status_code, 400)
 
+    def test_choose_picks_among_offered_lines_and_prices(self):
+        result = self.client.get('/picks/choose?league=esb8&home=alice&away=BOB&lines=4.5,5.5').get_json()
+        self.assertEqual((result['home_tag'], result['away_tag']), ('Alice', 'Bob'))
+        self.assertEqual(len(result['options']), 4)
+        self.assertEqual(result['best']['probability'], max(option['probability'] for option in result['options']))
+        self.assertIn(result['best']['selection'], result['advice'])
+        best = result['best']
+        side, line = best['selection'].split()
+        generous = self.client.get(f'/picks/choose?league=esb8&home=Alice&away=Bob&odds={side}{line}:'
+                                   f'{best["fair_odds"] + 1},o9.5:1.01').get_json()
+        self.assertEqual(generous['best']['selection'], best['selection'])
+        self.assertGreater(generous['best']['value'], 0)
+        self.assertTrue(generous['advice'].startswith('bet '))
+        stingy = self.client.get(f'/picks/choose?league=esb8&home=Alice&away=Bob&odds={side}{line}:1.01').get_json()
+        self.assertIsNone(stingy['best'])
+        self.assertTrue(stingy['advice'].startswith('no bet'))
+        carol = self.client.get('/picks/choose?league=esb8&home=Carol&away=Dave&lines=4.5').get_json()
+        self.assertIsNone(carol['best'])
+        self.assertEqual(carol['advice'], 'no call: new players')
+        self.assertEqual(self.client.get('/picks/choose?league=esb8&home=Nobody&away=Bob&lines=4.5').status_code, 404)
+        for query in ('home=Alice&away=Bob&lines=4.5', 'league=esb8&home=Alice&lines=4.5', 'league=esb8&home=Alice&away=Bob',
+                      'league=esb8&home=Alice&away=Bob&odds=over4.5', 'league=esb8&home=Alice&away=Bob&odds=over4:1.8',
+                      'league=esb8&home=Alice&away=Bob&lines=4.5&x=1'):
+            with self.subTest(query=query):
+                self.assertEqual(self.client.get('/picks/choose?'+query).status_code, 400)
+
     def test_goal_lines_give_every_line_with_fair_odds(self):
         pick = self.client.get('/picks?league=esb8').get_json()['leagues']['esb8'][0]
         lines = pick['goal_lines']

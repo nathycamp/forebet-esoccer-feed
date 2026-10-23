@@ -546,6 +546,116 @@ def picks():
     return feed_response(payload)
 
 
+def parse_selection(text):
+    """'over4.5', 'over 4.5', 'o4.5' or 'u5.5' -> ('over'|'under', 4.5)."""
+    text = text.strip().casefold().replace(" ", "")
+    for prefix, side in (("over", "over"), ("under", "under"), ("o", "over"), ("u", "under")):
+        if text.startswith(prefix):
+            try:
+                line = float(text[len(prefix):])
+            except ValueError:
+                break
+            if line in GOAL_LINES:
+                return side, line
+            break
+    raise ValueError(f"Invalid selection {text!r}; use e.g. over4.5 or under5.5 with an x.5 line from 1.5 to 9.5")
+
+
+def parse_odds(value):
+    """?odds=over4.5:1.85,under5.5:1.70 -> {('over', 4.5): 1.85, ...}."""
+    odds = {}
+    for part in value.split(","):
+        selection, _, price = part.partition(":")
+        try:
+            price = float(price)
+        except ValueError:
+            raise ValueError("odds must look like over4.5:1.85,under5.5:1.70 (decimal odds)") from None
+        if not 1 < price <= 1000:
+            raise ValueError("decimal odds must be above 1")
+        odds[parse_selection(selection)] = price
+    if not odds or len(odds) > 2 * MAX_AVAILABLE_LINES:
+        raise ValueError("give between 1 and 16 priced selections")
+    return odds
+
+
+@app.get("/picks/choose")
+def choose():
+    """For one game, choose among the selections the bookmaker actually offers."""
+    try:
+        unknown = set(request.args) - {"league", "home", "away", "lines", "odds"}
+        if unknown:
+            raise ValueError("Unknown query parameter: " + ", ".join(sorted(unknown)))
+        for name in request.args:
+            if len(request.args.getlist(name)) > 1:
+                raise ValueError(f"Specify {name} only once")
+        league = request.args.get("league", "").strip().lower()
+        if league not in LEAGUES:
+            raise ValueError("league is required: " + ", ".join(sorted(LEAGUES)))
+        home, away = (" ".join(request.args.get(side, "").casefold().split()) for side in ("home", "away"))
+        if not home or not away:
+            raise ValueError("home and away player tags are required")
+        odds = parse_odds(request.args["odds"]) if "odds" in request.args else {}
+        lines = parse_lines(request.args["lines"]) if "lines" in request.args else []
+        offered = sorted({(side, line) for line in lines for side in ("over", "under")} | set(odds))
+        if not offered:
+            raise ValueError("give lines=4.5,5.5 and/or odds=over4.5:1.85,under5.5:1.70")
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+    now = datetime.now(timezone.utc)
+    try:
+        payload = current_picks(now)
+    except Exception:
+        logger.exception("Could not build picks")
+        return jsonify({"error": "picks unavailable"}), 503
+    rows = payload["leagues"].get(league)
+    games = [row for row in rows if is_future_fixture(row, now) and matches_player(row, home)
+             and matches_player(row, away)] if isinstance(rows, list) else []
+    if not games:
+        return jsonify({"error": f"no upcoming {league} game between {home} and {away}"}), 404
+    pick = min(games, key=lambda row: row["kickoff_utc"])
+    rates = payload.get("league_over_rates", {}).get(league, {})
+    options = []
+    for side, line in offered:
+        chances = (pick.get("goal_lines") or {}).get(str(line))
+        if not chances:
+            continue
+        rate = rates.get(str(line))
+        option = {"selection": f"{side} {line}", "probability": chances[side],
+                  "fair_odds": chances[f"fair_{side}_odds"],
+                  "league_rate": None if rate is None else round(rate if side == "over" else 1 - rate, 4)}
+        if (side, line) in odds:
+            option["odds"] = odds[(side, line)]
+            option["value"] = round(chances[side] * odds[(side, line)] - 1, 4)
+        options.append(option)
+    # "too close" only concerns the league line; other offered lines can still be chosen.
+    usable = pick["call_status"] != "no call: new players" and not pick["call_status"].startswith("withheld")
+    best, advice = None, pick["call_status"]
+    if usable and options:
+        if odds:
+            priced = [option for option in options if "value" in option]
+            top = max(priced, key=lambda option: option["value"])
+            if top["value"] > 0:
+                best = top
+                advice = (f"bet {top['selection']}: {top['probability']:.0%} chance at {top['odds']} "
+                          f"(fair {top['fair_odds']}), expected return {top['value']:+.0%}")
+            else:
+                advice = "no bet: no offered price beats the model's fair odds"
+        else:
+            best = max(options, key=lambda option: option["probability"])
+            advice = f"take {best['selection']} only at odds above {best['fair_odds']}"
+            if best["probability"] < TOP_PICK_MIN_PROBABILITY:
+                advice = f"close call ({best['probability']:.0%}): skip unless {best['selection']} pays well above {best['fair_odds']}"
+    elif usable:
+        advice = "no goal lines available for this game"
+    result = {name: pick.get(name) for name in ("home_tag", "away_tag", "kickoff_utc", "call_status", "expected_goals",
+                                                "goals_line", "goals_call", "goals_probability", "warnings")}
+    result.update({"league": league, "proven_edge": league in TRUSTED_GOAL_LEAGUES,
+                   "options": sorted(options, key=lambda option: option.get("value", option["probability"]), reverse=True),
+                   "best": best, "advice": advice, "source_fetched_at": payload["source_fetched_at"],
+                   "generated_at": payload["generated_at"]})
+    return feed_response(result)
+
+
 def start_scheduler():
     scheduler = BackgroundScheduler(daemon=True, timezone="UTC")
     scheduler.add_job(
