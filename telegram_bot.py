@@ -31,7 +31,9 @@ WAT = timezone(timedelta(hours=1))
 MIN_PROBABILITY = .60
 KELLY_FRACTION = .25
 MAX_STAKE_SHARE = .05
-ALERT_MIN_MINUTES = 2
+ALERT_MIN_MINUTES = 1  # picks often turn 'play' only 1-3 minutes before kickoff
+ALERT_CANDIDATES = 10  # every 'play' pick in the window, not just the top 2
+RESULT_WAIT_HOURS = 2
 ALERT_MAX_MINUTES = 20
 SELECTION_RE = re.compile(r"\b(over|under|o|u)\s*(\d+\.5)\s*[:@= ]\s*(\d+(?:\.\d+)?)", re.I)
 LEAGUE_NAMES = {"esb8": "eSoccer Battle (8 min)", "volta6": "Volta (6 min)",
@@ -62,9 +64,11 @@ def wat(iso):
 
 
 def bet_name(selection):
-    """'under 5.5' -> 'UNDER 5.5 goals'."""
-    side, line = selection.split()
-    return f"{side.upper()} {line} goals"
+    """'under 5.5' -> 'UNDER 5.5 goals'; other markets are shown as they are."""
+    parts = selection.split()
+    if len(parts) == 2 and parts[0] in ("over", "under"):
+        return f"{parts[0].upper()} {parts[1]} goals"
+    return selection
 
 
 def other_options(options, best, limit=3):
@@ -87,6 +91,18 @@ def alert_text(pick):
         + (f"\nOther good options:\n{others}\n" if others else "")
         + "\n↩️ Reply with the odds you see to check, e.g. <code>u5.5 1.50</code>"
     )
+
+
+def result_text(selection, score, home, away):
+    """'✅ WON — UNDER 5.5 goals · final 2-1' for a finished alerted game (None if not over/under)."""
+    parts = selection.split()
+    if len(parts) != 2 or parts[0] not in ("over", "under"):
+        return None
+    side, line = parts
+    goals = sum(int(part) for part in score.split("-"))
+    won = goals > float(line) if side == "over" else goals < float(line)
+    return (f"{'✅ <b>WON</b>' if won else '❌ <b>LOST</b>'} — {bet_name(selection)}\n"
+            f"👥 {home} vs {away} · final <b>{score}</b> ({goals} goals)")
 
 
 def stake_text(stake, bank, min_stake):
@@ -170,6 +186,7 @@ class PickBot:
         self.alerted = set()
         self.alert_games = {}  # (chat id, message id) -> (league, home, away)
         self.last_game = {}    # chat id -> latest alerted game
+        self.pending = {}      # alerted game -> {selection, messages} until its result is posted
         self.offset = None
         self.lock = threading.Lock()
 
@@ -199,10 +216,10 @@ class PickBot:
 
     # --- alerts ---------------------------------------------------------------
     def check_alerts(self, now=None):
-        """Alert each new 'play' top pick kicking off in 2-20 minutes, to every chat."""
+        """Alert each new 'play' pick kicking off in 1-20 minutes, to every chat, then post results."""
         now = now or datetime.now(timezone.utc)
         sent = 0
-        for pick in self.top_picks():
+        for pick in self.top_picks(ALERT_CANDIDATES):
             kickoff = datetime.fromisoformat(pick["kickoff_utc"].replace("Z", "+00:00"))
             minutes = (kickoff - now).total_seconds() / 60
             key = (pick["league"], pick["home_tag"], pick["away_tag"], pick["kickoff_utc"])
@@ -213,20 +230,57 @@ class PickBot:
                     continue
                 self.alerted.add(key)
             game = (pick["league"], pick["home_tag"], pick["away_tag"])
+            messages = []
             for chat in self.chat_ids:
                 try:
                     message_id = self.send(alert_text(pick), chat)
                 except Exception:
                     logger.exception("Telegram alert to %s failed", chat)
                     continue
+                messages.append((chat, message_id))
                 with self.lock:
                     self.alert_games[(chat, message_id)] = game
                     self.last_game[chat] = game
+            with self.lock:
+                self.pending[key] = {"selection": pick["selection"], "messages": messages}
+            logger.info("Telegram alert sent: %s %s v %s %s (%.0f%%), kickoff %s",
+                        pick["league"], pick["home_tag"], pick["away_tag"], pick["selection"],
+                        pick["probability"] * 100, pick["kickoff_utc"])
             sent += 1
         with self.lock:  # forget games that kicked off long ago
-            cutoff = (now - timedelta(hours=2)).isoformat()
+            cutoff = (now - timedelta(hours=RESULT_WAIT_HOURS)).isoformat()
             self.alerted = {key for key in self.alerted if key[3] >= cutoff}
+        self.check_results(now)
         return sent
+
+    def check_results(self, now=None):
+        """Reply to each alert with WON / LOST once Forebet shows the final score."""
+        now = now or datetime.now(timezone.utc)
+        with self.lock:
+            pending = dict(self.pending)
+        for key, alert in pending.items():
+            league, home, away, kickoff = key
+            status, payload = self.get("/predictions", league=league, status="played", player=home, limit=20)
+            rows = payload.get("leagues", {}).get(league, []) if status == 200 else []
+            target = datetime.fromisoformat(kickoff.replace("Z", "+00:00"))
+            final = next((row for row in rows if row.get("home_tag") == home and row.get("away_tag") == away
+                          and abs((datetime.fromisoformat(row["kickoff_utc"].replace("Z", "+00:00")) - target)
+                                  .total_seconds()) <= 25 * 60 and row.get("actual_score")), None)
+            if not final:
+                if now - target > timedelta(hours=RESULT_WAIT_HOURS):
+                    with self.lock:
+                        self.pending.pop(key, None)
+                continue
+            text = result_text(alert["selection"], final["actual_score"], home, away)
+            for chat, message_id in alert["messages"] if text else []:
+                try:
+                    self.send(text, chat, reply_to=message_id)
+                except Exception:
+                    logger.exception("Telegram result to %s failed", chat)
+            logger.info("Telegram result sent: %s %s v %s %s -> %s", league, home, away, alert["selection"],
+                        final["actual_score"])
+            with self.lock:
+                self.pending.pop(key, None)
 
     # --- commands -------------------------------------------------------------
     def handle(self, message):

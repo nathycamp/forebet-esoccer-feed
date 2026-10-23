@@ -67,15 +67,31 @@ class BotTests(unittest.TestCase):
 
     def test_alerts_go_to_every_chat_once(self):
         with patch.object(app, "TOP_PICK_MIN_PROBABILITY", 0.), patch.object(app, "play_advice", return_value="play"):
-            self.assertEqual(self.bot.check_alerts(), 2)  # top 2 picks
+            sent = self.bot.check_alerts()
+            self.assertGreaterEqual(sent, 2)  # every play pick in the window
             self.assertEqual(self.bot.check_alerts(), 0)
-        self.assertEqual([chat for chat, _ in self.sent], ["42", "-100", "42", "-100"])
+        self.assertEqual([chat for chat, _ in self.sent][:4], ["42", "-100", "42", "-100"])
         text = self.sent[0][1]
         self.assertIn("BET ALERT", text)
         self.assertIn("Alice vs Bob", text)
         self.assertIn("Lagos time", text)
         self.assertIn("Only bet if odds are", text)
         self.assertEqual(self.bot.alert_games[("-100", 2)], ("esb8", "Alice", "Bob"))
+
+    def test_result_is_posted_as_a_reply_once_the_game_ends(self):
+        self.assertIn("WON", telegram_bot.result_text("under 5.5", "2-1", "A", "B"))
+        self.assertIn("LOST", telegram_bot.result_text("under 5.5", "4-2", "A", "B"))
+        self.assertIn("WON", telegram_bot.result_text("over 4.5", "3-2", "A", "B"))
+        self.assertIsNone(telegram_bot.result_text("12 (no draw)", "3-2", "A", "B"))
+        self.assertEqual(telegram_bot.bet_name("12 (no draw)"), "12 (no draw)")
+        played = self.rows[0]  # Alice v Bob, 4-1, 20 minutes ago
+        key = ("esb8", "Alice", "Bob", played["kickoff_utc"])
+        self.bot.pending[key] = {"selection": "under 5.5", "messages": [("42", 5), ("-100", 6)]}
+        self.bot.check_results()
+        self.assertEqual(len(self.sent), 2)
+        self.assertIn("WON", self.sent[0][1])
+        self.assertIn("4-1", self.sent[0][1])
+        self.assertNotIn(key, self.bot.pending)
 
     def test_skip_picks_are_not_alerted(self):
         with patch.object(app, "play_advice", return_value="skip (below 60%)"):
