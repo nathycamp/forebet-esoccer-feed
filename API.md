@@ -92,6 +92,13 @@ Forebet's, `kickoff_adjusted_minutes` gives the shift and a
 `kickoff_adjusted_for_N_minute_delay` warning is added. Other mismatches still
 withhold picks.
 
+`lines=4.5,5.5` (up to 8 x.5 lines) says which lines your bookmaker offers.
+Each pick then gets `best_available`: the likeliest over/under among those
+lines, with `selection`, `probability`, `fair_odds` and the league's
+`league_rate` for it, and `top_picks` ranks those instead. In replays the best
+of over/under 4.5 and 5.5 landed 71% (volta6) and 75% (esb8) of the time,
+against 59-60% for the same picks across the league.
+
 `top_picks` lists up to two games whose safest option is at least 60%, proven
 over/under calls first and then the likeliest, each with its `league` and safest-option fields.
 `top_picks_status` is `no top pick right now` when nothing qualifies.

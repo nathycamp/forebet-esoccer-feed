@@ -48,8 +48,12 @@ PICK_FIELDS = {
     "goals_confidence", "favourite", "favourite_probability",
     "favourite_strength", "call_status", "warnings",
     "one_x_two", "double_chance", "winner_markets_trust", "safest_option",
-    "goal_lines", "kickoff_adjusted_minutes", "listed_kickoff_utc",
+    "goal_lines", "kickoff_adjusted_minutes", "listed_kickoff_utc", "best_available",
 }
+GOAL_LINES = [line + .5 for line in range(1, 10)]
+# Picking the likeliest of the lines a bookmaker shows (e.g. 4.5 and 5.5) also
+# beat league rates in esb8 and volta6 replays (71-75% landed vs 59-60%).
+MAX_AVAILABLE_LINES = 8
 # Replays of the feed's own results showed a goals edge at the league line only here.
 TRUSTED_GOAL_LEAGUES = {"esb8", "volta6"}
 # Near-even calls and players new to the feed carry no real model opinion.
@@ -270,8 +274,7 @@ def matches_player(row, player):
                for side in ("home_tag", "away_tag"))
 
 
-def league_goal_line(rows, now):
-    """The league's usual x.5 line from this snapshot's results, and how often it went over."""
+def league_totals(rows, now):
     totals = []
     for row in rows:
         try:
@@ -279,6 +282,12 @@ def league_goal_line(rows, now):
                 totals.append(sum(int(goals) for goals in row["actual_score"].split("-")))
         except (KeyError, ValueError, TypeError, AttributeError):
             continue
+    return totals
+
+
+def league_goal_line(rows, now):
+    """The league's usual x.5 line from this snapshot's results, and how often it went over."""
+    totals = league_totals(rows, now)
     if not totals:
         return None, None
     line = min(8.5, max(1.5, math.floor(sum(totals) / len(totals)) + .5))
@@ -368,12 +377,16 @@ def build_picks(feed, now):
               for key in delays for row in feed["leagues"][key] if "listed_kickoff_utc" in row}
     forecasts = predict_feed(feed, now=now, use_live_scores=True)
     leagues = {}
+    over_rates = {}
     for key, rows in feed["leagues"].items():
         if not isinstance(rows, list):
             leagues[key] = {"status": "error"}
             continue
         diagnostics = forecasts["diagnostics"][key]
         line, over_rate = league_goal_line(rows, now)
+        totals = league_totals(rows, now)
+        over_rates[key] = {str(goal_line): round(sum(total > goal_line for total in totals) / len(totals), 4)
+                           for goal_line in GOAL_LINES} if totals else {}
         rates = outcome_rates(rows)
         picks = []
         for forecast in forecasts["leagues"][key]:
@@ -424,7 +437,35 @@ def build_picks(feed, now):
             "stale": forecasts["stale"], "model_version": MODEL_VERSION,
             "validation_status": "experimental_uncalibrated",
             "goals_line_basis": "league mean of this snapshot's results, rounded down to x.5",
-            "league_fetched_at": feed["league_fetched_at"], "leagues": leagues}
+            "league_fetched_at": feed["league_fetched_at"], "leagues": leagues, "league_over_rates": over_rates}
+
+
+def parse_lines(value):
+    """?lines=4.5,5.5: the x.5 goal lines a bookmaker offers."""
+    try:
+        lines = sorted({float(part) for part in value.split(",")})
+    except ValueError:
+        lines = []
+    if not lines or len(lines) > MAX_AVAILABLE_LINES or any(line not in GOAL_LINES for line in lines):
+        raise ValueError("lines must be up to 8 comma-separated x.5 goal lines from 1.5 to 9.5, e.g. lines=4.5,5.5")
+    return lines
+
+
+def best_available(pick, lines, over_rates):
+    """The likeliest over/under among the offered lines, with fair odds and the league rate."""
+    if not pick.get("goal_lines") or pick["call_status"] == "no call: new players":
+        return None
+    options = []
+    for line in lines:
+        chances = pick["goal_lines"].get(str(line))
+        if not chances:
+            continue
+        rate = over_rates.get(str(line))
+        for side in ("over", "under"):
+            options.append({"selection": f"{side} {line}", "probability": chances[side],
+                            "fair_odds": chances[f"fair_{side}_odds"],
+                            "league_rate": None if rate is None else round(rate if side == "over" else 1 - rate, 4)})
+    return max(options, key=lambda option: option["probability"]) if options else None
 
 
 def current_picks(now):
@@ -441,7 +482,8 @@ def current_picks(now):
 @app.get("/picks")
 def picks():
     try:
-        selected, _, fields, limit, player = query_options(PICK_FIELDS, with_status=False, extra=("top",))
+        selected, _, fields, limit, player = query_options(PICK_FIELDS, with_status=False, extra=("top", "lines"))
+        lines = parse_lines(request.args["lines"]) if "lines" in request.args else None
         top_count = None
         if "top" in request.args:
             value = request.args["top"]
@@ -471,8 +513,17 @@ def picks():
             rows = [row for row in rows if (row["kickoff_utc"] == rows[0]["kickoff_utc"]
                                             or not is_future_fixture(row, horizon))
                     and (player is None or matches_player(row, player))]
-            candidates += [dict(row, league=key, **row["safest_option"]) for row in rows if row["safest_option"]
-                           and (top_count or row["safest_option"]["probability"] >= TOP_PICK_MIN_PROBABILITY)]
+            if lines:
+                rates = payload.get("league_over_rates", {}).get(key, {})
+                for row in rows:
+                    row["best_available"] = best_available(row, lines, rates)
+                # Only the offered lines count, so top picks rank the best of those.
+                candidates += [dict(row, league=key, market="over_under", proven_edge=key in TRUSTED_GOAL_LEAGUES,
+                                    **row["best_available"]) for row in rows if row["best_available"]
+                               and (top_count or row["best_available"]["probability"] >= TOP_PICK_MIN_PROBABILITY)]
+            else:
+                candidates += [dict(row, league=key, **row["safest_option"]) for row in rows if row["safest_option"]
+                               and (top_count or row["safest_option"]["probability"] >= TOP_PICK_MIN_PROBABILITY)]
             if limit is not None:
                 rows = rows[:limit]
             if fields is not None:
@@ -482,11 +533,14 @@ def picks():
     # ?top=N ranks every eligible game; by default only options at 60%+ qualify.
     # Proven goals calls come before other markets, then the likelier option.
     top = sorted(candidates, key=lambda row: (row["proven_edge"], row["probability"]), reverse=True)[:top_count or TOP_PICKS]
-    top_keys = {"league", "market", "selection", "probability", "league_rate", "proven_edge"}
+    top_keys = {"league", "market", "selection", "probability", "league_rate", "proven_edge", "fair_odds"}
     top = [{name: value for name, value in row.items() if (name in fields if fields is not None
             else name not in ("safest_option", "one_x_two", "double_chance")) or name in top_keys} for row in top]
     payload["top_picks"] = top
     payload["top_picks_status"] = "ok" if top else "no top pick right now"
+    payload.pop("league_over_rates", None)
+    if lines:
+        payload["lines_offered"] = lines
     if top_count:
         del payload["leagues"]
     return feed_response(payload)

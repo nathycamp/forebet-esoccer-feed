@@ -229,6 +229,24 @@ class PicksTests(unittest.TestCase):
         self.assertEqual(result['top_picks'], [])
         self.assertEqual(result['top_picks_status'], 'no top pick right now')
 
+    def test_lines_pick_the_likeliest_offered_line(self):
+        result = self.client.get('/picks?league=esb8&lines=4.5,5.5').get_json()
+        self.assertEqual(result['lines_offered'], [4.5, 5.5])
+        alice, carol = result['leagues']['esb8']
+        best = alice['best_available']
+        options = {f'{side} {line}': alice['goal_lines'][line][side] for line in ('4.5', '5.5') for side in ('over', 'under')}
+        self.assertEqual(best['selection'], max(options, key=options.get))
+        self.assertEqual(best['probability'], max(options.values()))
+        self.assertIsNotNone(best['league_rate'])
+        self.assertIsNone(carol['best_available'])
+        self.assertNotIn('league_over_rates', result)
+        top = self.client.get('/picks?top=1&lines=4.5,5.5').get_json()['top_picks'][0]
+        self.assertTrue(top['selection'].endswith(('4.5', '5.5')))
+        self.assertIn('fair_odds', top)
+        for query in ('lines=5', 'lines=4.5,x', 'lines=10.5', 'lines=', 'lines=4.5&lines=5.5'):
+            with self.subTest(query=query):
+                self.assertEqual(self.client.get('/picks?'+query).status_code, 400)
+
     def test_goal_lines_give_every_line_with_fair_odds(self):
         pick = self.client.get('/picks?league=esb8').get_json()['leagues']['esb8'][0]
         lines = pick['goal_lines']
