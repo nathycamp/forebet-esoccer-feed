@@ -6,7 +6,10 @@ Telegram Bot API. It never logs in to or bets on any bookmaker.
 
 Settings (Railway variables):
   TELEGRAM_BOT_TOKEN  bot token from @BotFather (bot is off without it)
-  TELEGRAM_CHAT_ID    the only chat the bot alerts and answers
+  TELEGRAM_CHAT_ID    chat(s) that get alerts and may reply, comma-separated
+                      (a private chat id and/or a group id such as -1001234567890)
+  TELEGRAM_ADMIN_ID   the only user who may change /bank and /lines
+                      (default: the first private chat id)
   TELEGRAM_BANK       optional starting bankroll for stake sizing (/bank changes it)
   TELEGRAM_LINES      optional default lines for alerts, e.g. "4.5,5.5" (/lines changes it)
   TELEGRAM_MIN_STAKE  smallest stake worth suggesting (default 100)
@@ -31,6 +34,8 @@ MAX_STAKE_SHARE = .05
 ALERT_MIN_MINUTES = 2
 ALERT_MAX_MINUTES = 20
 SELECTION_RE = re.compile(r"\b(over|under|o|u)\s*(\d+\.5)\s*[:@= ]\s*(\d+(?:\.\d+)?)", re.I)
+LEAGUE_NAMES = {"esb8": "eSoccer Battle (8 min)", "volta6": "Volta (6 min)",
+                "gt12": "GT League (12 min)", "h2hgg": "H2H GG (8 min)"}
 
 
 def kelly_stake(probability, odds, bank, fraction=KELLY_FRACTION, cap=MAX_STAKE_SHARE):
@@ -56,74 +61,112 @@ def wat(iso):
     return moment.astimezone(WAT).strftime("%H:%M")
 
 
-def format_lines(goal_lines, around):
-    """Compact chances for the lines near the pick: '4.5 o73% u27% · 5.5 o59% u41%'."""
-    wanted = [str(around + step) for step in (-1, 0, 1, 2)]
-    shown = [f"{line} o{goal_lines[line]['over']:.0%} u{goal_lines[line]['under']:.0%}"
-             for line in wanted if line in (goal_lines or {})]
-    return " · ".join(shown)
+def bet_name(selection):
+    """'under 5.5' -> 'UNDER 5.5 goals'."""
+    side, line = selection.split()
+    return f"{side.upper()} {line} goals"
 
 
-def playable_text(options, limit=5):
-    """'o4.5 >1.37 (73%) · u7.5 >1.41 (71%)' for the most useful 60%+ options."""
-    useful = [option for option in options or [] if option["min_odds"] >= 1.15][:limit]
-    return " · ".join(f"{option['selection'][0]}{option['selection'].split()[1]} >{option['min_odds']} "
-                      f"({option['probability']:.0%})" for option in useful) or "none"
+def other_options(options, best, limit=3):
+    """Other 60%+ options worth a look (skipping near-certain, tiny-price ones)."""
+    useful = [option for option in options or []
+              if option["selection"] != best and option["min_odds"] >= 1.15][:limit]
+    return "\n".join(f"• {bet_name(option['selection'])} — {option['probability']:.0%} — odds above {option['min_odds']}"
+                     for option in useful)
 
 
 def alert_text(pick):
-    line = float(pick["selection"].split()[-1])
+    others = other_options(pick.get("playable_options"), pick["selection"])
     return (
-        f"⚽ <b>PLAY</b> · {pick['league']} · kickoff {wat(pick['kickoff_utc'])} WAT\n"
-        f"<b>{pick['home_tag']} v {pick['away_tag']}</b>\n"
-        f"<b>{pick['selection'].capitalize()}</b> — {pick['probability']:.0%} "
-        f"(league {pick['league_rate']:.0%}), expected goals {pick['expected_goals']}\n"
-        f"Bet only if odds are above <b>{pick['fair_odds']}</b>\n"
-        f"Playable (60%+, bet if odds above): {playable_text(pick.get('playable_options'))}\n"
-        f"Lines: {format_lines(pick.get('goal_lines'), line)}\n"
-        f"↩️ Reply with your odds, e.g. <code>o4.5 1.55 u5.5 1.70</code>"
+        f"⚽ <b>BET ALERT</b> — {LEAGUE_NAMES.get(pick['league'], pick['league'])}\n"
+        f"🕐 Kickoff <b>{wat(pick['kickoff_utc'])}</b> (Lagos time)\n"
+        f"👥 <b>{pick['home_tag']} vs {pick['away_tag']}</b>\n\n"
+        f"✅ Best bet: <b>{bet_name(pick['selection'])}</b>\n"
+        f"📊 Chance: <b>{pick['probability']:.0%}</b>\n"
+        f"💰 Only bet if odds are <b>above {pick['fair_odds']}</b>\n"
+        + (f"\nOther good options:\n{others}\n" if others else "")
+        + "\n↩️ Reply with the odds you see to check, e.g. <code>u5.5 1.50</code>"
     )
 
 
+def stake_text(stake, bank, min_stake):
+    if not bank:
+        return "💵 Stake: up to 5% of your bankroll"
+    if stake < min_stake:
+        return f"💵 Edge too small for a {min_stake:g} stake — skip"
+    return f"💵 Stake: <b>{stake:g}</b> ({stake / bank:.1%} of {bank:g} bankroll)"
+
+
 def advice_text(choice, bank, min_stake):
-    """Choose the best value option at 60%+ from a /picks/choose result."""
-    header = f"<b>{choice['home_tag']} v {choice['away_tag']}</b> · kickoff {wat(choice['kickoff_utc'])} WAT\n"
+    """Choose the best value option at the league's floor from a /picks/choose result."""
+    header = (f"👥 <b>{choice['home_tag']} vs {choice['away_tag']}</b> — "
+              f"kickoff {wat(choice['kickoff_utc'])}\n\n")
     if choice.get("best") is None and not choice.get("options"):
-        return header + f"⛔ No bet: {choice.get('advice')}"
+        return header + f"⛔ <b>NO BET</b> — {choice.get('advice')}"
     floor = choice.get("min_probability", MIN_PROBABILITY)
     playable = [option for option in choice.get("options", [])
                 if option.get("value", 0) > 0 and option["probability"] >= floor]
-    rows = "\n".join(
-        f"{'✅' if option in playable else '·'} {option['selection']} @ {option.get('odds', '-')}: "
-        f"{option['probability']:.0%}, fair {option['fair_odds']}, value {option.get('value', 0):+.0%}"
-        for option in choice.get("options", []))
-    if choice.get("call_status", "ok") != "ok" and not choice["call_status"].startswith("no call: too close"):
-        return header + rows + f"\n⛔ No bet: {choice['call_status']}"
+    checked = []
+    for option in choice.get("options", []):
+        name = f"{bet_name(option['selection'])} @ {option.get('odds', '-')}"
+        if option in playable:
+            checked.append(f"✅ {name} — good price")
+        elif option["probability"] < floor:
+            checked.append(f"❌ {name} — chance only {option['probability']:.0%}")
+        else:
+            checked.append(f"❌ {name} — price too low (needs above {option['fair_odds']})")
+    checked_text = "\nChecked:\n" + "\n".join(checked)
+    status = choice.get("call_status", "ok")
+    if status != "ok" and not status.startswith("no call: too close"):
+        return header + f"⛔ <b>NO BET</b> — {status}\n" + checked_text
+    if choice.get("advice", "").startswith("wait"):
+        return header + "⏳ <b>WAIT</b> — a player's previous game isn't at half time yet\n" + checked_text
     if not playable:
-        return header + rows + f"\n⛔ <b>No bet</b>: no option is both {floor:.0%}+ and above its fair odds"
+        return header + "⛔ <b>NO BET</b> — no price is high enough\n" + checked_text
     best = max(playable, key=lambda option: option["value"])
-    stake = kelly_stake(best["probability"], best["odds"], bank)
-    if not bank:
-        stake_text = "set /bank to get a stake"
-    elif stake < min_stake:
-        stake_text = f"edge too small for the {min_stake:g} minimum — skip"
-    else:
-        stake_text = f"stake <b>{stake:g}</b> ({stake / bank:.1%} of {bank:g})"
-    return (header + rows + f"\n👉 <b>Bet {best['selection']} @ {best['odds']}</b> — "
-            f"{best['probability']:.0%}, expected return {best['value']:+.0%}\n{stake_text}")
+    return (header
+            + f"✅ <b>BET: {bet_name(best['selection'])} @ {best['odds']}</b>\n"
+            + f"📊 Chance {best['probability']:.0%} · expected profit {best['value']:+.0%}\n"
+            + stake_text(kelly_stake(best["probability"], best["odds"], bank), bank, min_stake) + "\n"
+            + checked_text)
+
+
+def top_text(picks):
+    if not picks:
+        return "No pick right now."
+    blocks = []
+    for pick in picks:
+        state = {"play": "✅ ready to bet"}.get(pick.get("advice"), pick.get("advice", ""))
+        if pick.get("advice", "").startswith("wait"):
+            state = "⏳ wait — previous game not at half time yet"
+        blocks.append(f"⚽ {LEAGUE_NAMES.get(pick['league'], pick['league'])} — {wat(pick['kickoff_utc'])}\n"
+                      f"👥 <b>{pick['home_tag']} vs {pick['away_tag']}</b>\n"
+                      f"{bet_name(pick['selection'])} — {pick['probability']:.0%} — odds above {pick['fair_odds']}\n"
+                      f"{state}")
+    return "\n\n".join(blocks)
+
+
+HELP = ("I post a <b>BET ALERT</b> when a game is ready to bet, 2–20 min before kickoff.\n\n"
+        "↩️ Reply to an alert with the odds you see, e.g. <code>u5.5 1.50 o3.5 1.55</code>, "
+        "and I'll say which to bet, or that none is good enough.\n\n"
+        "/top — the current best picks\n"
+        "/help — this message\n"
+        "Owner only: /bank 5000 (bankroll for stakes), /lines 4.5,5.5 (/lines off)")
 
 
 class PickBot:
-    def __init__(self, client, token, chat_id, bank=None, lines=None, min_stake=100.):
+    def __init__(self, client, token, chat_ids, bank=None, lines=None, min_stake=100., admin_id=None):
         self.client = client
         self.token = token
-        self.chat_id = str(chat_id)
+        self.chat_ids = [str(chat).strip() for chat in str(chat_ids).split(",") if str(chat).strip()]
+        private = [chat for chat in self.chat_ids if not chat.startswith("-")]
+        self.admin_id = str(admin_id) if admin_id else (private[0] if private else None)
         self.bank = bank
         self.lines = lines
         self.min_stake = min_stake
         self.alerted = set()
-        self.alert_games = {}  # Telegram message id -> (league, home, away)
-        self.last_game = None
+        self.alert_games = {}  # (chat id, message id) -> (league, home, away)
+        self.last_game = {}    # chat id -> latest alerted game
         self.offset = None
         self.lock = threading.Lock()
 
@@ -134,8 +177,8 @@ class PickBot:
         with urllib.request.urlopen(request, timeout=http_timeout) as response:
             return json.load(response)
 
-    def send(self, text, reply_to=None):
-        result = self.api("sendMessage", http_timeout=15, chat_id=self.chat_id, text=text, parse_mode="HTML",
+    def send(self, text, chat_id, reply_to=None):
+        result = self.api("sendMessage", http_timeout=15, chat_id=chat_id, text=text, parse_mode="HTML",
                           disable_web_page_preview="true", reply_to_message_id=reply_to)
         return result.get("result", {}).get("message_id")
 
@@ -153,7 +196,7 @@ class PickBot:
 
     # --- alerts ---------------------------------------------------------------
     def check_alerts(self, now=None):
-        """Alert each new 'play' top pick kicking off in 2-20 minutes."""
+        """Alert each new 'play' top pick kicking off in 2-20 minutes, to every chat."""
         now = now or datetime.now(timezone.utc)
         sent = 0
         for pick in self.top_picks():
@@ -166,11 +209,16 @@ class PickBot:
                 if key in self.alerted:
                     continue
                 self.alerted.add(key)
-            message_id = self.send(alert_text(pick))
             game = (pick["league"], pick["home_tag"], pick["away_tag"])
-            with self.lock:
-                self.alert_games[message_id] = game
-                self.last_game = game
+            for chat in self.chat_ids:
+                try:
+                    message_id = self.send(alert_text(pick), chat)
+                except Exception:
+                    logger.exception("Telegram alert to %s failed", chat)
+                    continue
+                with self.lock:
+                    self.alert_games[(chat, message_id)] = game
+                    self.last_game[chat] = game
             sent += 1
         with self.lock:  # forget games that kicked off long ago
             cutoff = (now - timedelta(hours=2)).isoformat()
@@ -179,23 +227,23 @@ class PickBot:
 
     # --- commands -------------------------------------------------------------
     def handle(self, message):
-        if str(message.get("chat", {}).get("id")) != self.chat_id:
-            return None
+        chat = str(message.get("chat", {}).get("id"))
         text = (message.get("text") or "").strip()
         command = text.split()[0].split("@")[0].lower() if text.startswith("/") else ""
+        if command == "/chatid":  # lets the owner add a new group: tells its id
+            return f"This chat's id is <code>{chat}</code>"
+        if chat not in self.chat_ids:
+            return None
         if command in ("/start", "/help"):
-            return ("I alert you when the feed has a <b>play</b> pick, 2–20 min before kickoff.\n"
-                    "↩️ Reply to an alert with your odds: <code>o4.5 1.55 u5.5 1.70</code>\n"
-                    "/odds o4.5 1.55 … — odds for the latest alerted game\n"
-                    "/bank 5000 — bankroll for stake sizing\n"
-                    "/lines 4.5,5.5 — only alert on these lines (/lines off for any)\n"
-                    "/top — current top 2 picks")
+            return HELP
+        if command in ("/bank", "/lines") and str(message.get("from", {}).get("id")) != self.admin_id:
+            return "Only the owner can change settings."
         if command == "/bank":
             try:
                 self.bank = float(text.split()[1].replace(",", ""))
             except (IndexError, ValueError):
-                return f"Bank is {self.bank or 'not set'}. Use /bank 5000"
-            return f"Bank set to {self.bank:g}. Stakes are quarter-Kelly, at most 5% of the bank."
+                return f"Bankroll is {self.bank or 'not set'}. Use /bank 5000"
+            return f"Bankroll set to {self.bank:g}. Stakes are sized to the edge, at most 5% of it."
         if command == "/lines":
             value = text[len("/lines"):].strip().replace(" ", "")
             if value.lower() in ("", "off", "any"):
@@ -207,20 +255,14 @@ class PickBot:
             self.lines = value
             return f"Alerts now pick from lines {value}."
         if command == "/top":
-            picks = self.top_picks()
-            if not picks:
-                return "No top pick right now."
-            return "\n\n".join(
-                f"{pick['league']} {wat(pick['kickoff_utc'])} WAT · {pick['home_tag']} v {pick['away_tag']}\n"
-                f"{pick['selection']} {pick['probability']:.0%} (fair {pick['fair_odds']}) · {pick['advice']}"
-                for pick in picks)
+            return top_text(self.top_picks())
         odds = parse_odds_text(text)
         if not odds:
-            return "Send odds like <code>o4.5 1.55 u5.5 1.70</code>, or /help" if command else None
+            return "Send odds like <code>u5.5 1.50</code>, or /help" if command else None
         reply_to = (message.get("reply_to_message") or {}).get("message_id")
-        game = self.alert_games.get(reply_to) or self.last_game
+        game = self.alert_games.get((chat, reply_to)) or self.last_game.get(chat)
         if not game:
-            return "Reply to an alert so I know which game the odds are for."
+            return "Reply to a BET ALERT so I know which game the odds are for."
         league, home, away = game
         status, choice = self.get("/picks/choose", league=league, home=home, away=away, odds=odds)
         if status != 200:
@@ -242,7 +284,7 @@ class PickBot:
                 logger.exception("Telegram command failed")
                 answer = "Something went wrong reading the feed; try again in a minute."
             if answer:
-                self.send(answer, reply_to=message.get("message_id"))
+                self.send(answer, message["chat"]["id"], reply_to=message.get("message_id"))
 
     def poll_forever(self):
         while True:
@@ -256,17 +298,18 @@ class PickBot:
 
 def start(client, scheduler=None):
     """Start command polling when TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID are set; returns the bot."""
-    token, chat_id = os.environ.get("TELEGRAM_BOT_TOKEN"), os.environ.get("TELEGRAM_CHAT_ID")
-    if not token or not chat_id:
+    token, chat_ids = os.environ.get("TELEGRAM_BOT_TOKEN"), os.environ.get("TELEGRAM_CHAT_ID")
+    if not token or not chat_ids:
         logger.info("Telegram bot off: set TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID")
         return None
     bank = os.environ.get("TELEGRAM_BANK")
-    bot = PickBot(client, token, chat_id, bank=float(bank) if bank else None,
+    bot = PickBot(client, token, chat_ids, bank=float(bank) if bank else None,
                   lines=os.environ.get("TELEGRAM_LINES") or None,
-                  min_stake=float(os.environ.get("TELEGRAM_MIN_STAKE", "100")))
+                  min_stake=float(os.environ.get("TELEGRAM_MIN_STAKE", "100")),
+                  admin_id=os.environ.get("TELEGRAM_ADMIN_ID"))
 
     # Alerts run right after each feed read (app.after_refresh), so a pick that turns
     # "play" is sent within seconds of the read that shows it.
     threading.Thread(target=bot.poll_forever, name="telegram-poll", daemon=True).start()
-    logger.info("Telegram bot on for chat %s", chat_id)
+    logger.info("Telegram bot on for chats %s", ", ".join(bot.chat_ids))
     return bot
