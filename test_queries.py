@@ -323,6 +323,18 @@ class PicksTests(unittest.TestCase):
         self.assertEqual(options[0]['min_odds'], alice['goal_lines'][line][f'fair_{side}_odds'])
         self.assertEqual([o['probability'] for o in options], sorted((o['probability'] for o in options), reverse=True))
 
+    def test_board_lists_every_game_play_first(self):
+        result = self.client.get('/picks?lines=4.5,5.5').get_json()
+        board = result['board']
+        shown = sum(len(rows) for rows in result['leagues'].values() if isinstance(rows, list))
+        self.assertEqual(len(board), shown)
+        order = [app.ADVICE_ORDER.get(row['advice'].split()[0], 3) for row in board]
+        self.assertEqual(order, sorted(order))
+        alice = next(row for row in board if row['home_tag'] == 'Alice' and row['league'] == 'esb8')
+        self.assertTrue(alice['selection'].endswith(('4.5', '5.5')))
+        self.assertAlmostEqual(alice['edge'], alice['probability'] - next(
+            p for p in result['leagues']['esb8'] if p['home_tag'] == 'Alice')['best_available']['league_rate'], places=3)
+
     def test_top_picks_rank_by_edge_over_league_rate(self):
         easy = {'probability': .74, 'league_rate': .70}
         sharp = {'probability': .67, 'league_rate': .50}

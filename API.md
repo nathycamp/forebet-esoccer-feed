@@ -128,6 +128,11 @@ min_odds}` (min_odds = fair odds), best chance first, for esb8/volta6/gt12 picks
 client can decide locally: among options whose bookmaker odds exceed
 `min_odds`, take the highest `probability * odds - 1`.
 
+`board` is one row per game in the window across all leagues —
+`{league, kickoff_utc, home_tag, away_tag, selection, probability, fair_odds,
+edge, advice}` — `play` first, then `wait`, then `skip`, biggest edge first. With
+`lines=` the selection is the best of those lines.
+
 `top_picks` lists up to two games whose safest option is at least 60%, proven
 over/under calls first, then the biggest `edge` (chance minus the league's rate
 for that selection), each with its `league` and safest-option fields.

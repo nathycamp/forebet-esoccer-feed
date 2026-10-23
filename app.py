@@ -552,6 +552,21 @@ def build_picks(feed, now):
             "league_fetched_at": feed["league_fetched_at"], "leagues": leagues, "league_over_rates": over_rates}
 
 
+ADVICE_ORDER = {"play": 0, "wait": 1, "skip": 2}
+
+
+def board_row(row, league, lines):
+    """A one-line summary of a game: its best option, chance, edge and advice."""
+    option = row.get("best_available") if lines else row.get("safest_option")
+    entry = {"league": league, "kickoff_utc": row["kickoff_utc"], "home_tag": row["home_tag"],
+             "away_tag": row["away_tag"], "advice": row["advice"], "selection": None, "probability": None,
+             "fair_odds": None, "edge": None}
+    if option:
+        entry.update(selection=option["selection"], probability=option["probability"],
+                     fair_odds=option.get("fair_odds"), edge=round(pick_edge(option), 4))
+    return entry
+
+
 def pick_edge(row):
     """Model chance minus the league's rate for the same selection."""
     rate = row.get("league_rate")
@@ -650,6 +665,7 @@ def picks():
     payload["league_fetched_at"] = {key: value for key, value in payload["league_fetched_at"].items() if key in selected}
     leagues = {}
     candidates = []
+    board = []
     for key in LEAGUES:
         if key not in selected:
             continue
@@ -675,12 +691,16 @@ def picks():
                                and (top_count or row["safest_option"]["probability"] >= min_probability(key))]
             for row in rows:
                 row["advice"] = row_advice(row, key, lines)
+                board.append(board_row(row, key, lines))
             if limit is not None:
                 rows = rows[:limit]
             if fields is not None:
                 rows = [{name: value for name, value in row.items() if name in fields} for row in rows]
         leagues[key] = rows
     payload["leagues"] = leagues
+    # One row per game in the window across all leagues: play, then wait, then skip; biggest edge first.
+    payload["board"] = sorted(board, key=lambda row: (ADVICE_ORDER.get(row["advice"].split()[0], 3),
+                                                      -(row["edge"] or 0), row["kickoff_utc"]))
     # ?top=N ranks every eligible game; by default only options at 60%+ qualify.
     # Proven goals calls first, then the biggest edge over the league's own rate for
     # that selection: a 74% GT12 under 5.5 in a league where 70% stay under is a
