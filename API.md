@@ -67,7 +67,7 @@ gzip and ETag behavior.
 | `goals_line` | The league's usual line: mean total goals of this snapshot's results, rounded down to x.5 |
 | `goals_call`, `goals_probability` | `over` or `under` that line, and the model's probability for the likelier side. `goals_call` is null below 55%, or when either player has fewer than 5 results in the snapshot |
 | `expected_goals` | Model's expected total goals |
-| `goals_confidence` | `trusted` for esb8 and volta6, where replays showed an edge; `low` otherwise |
+| `goals_confidence` | `trusted` for esb8, volta6 and gt12, where replays showed an edge; `low` otherwise |
 | `favourite`, `favourite_probability` | Home tag, away tag or `draw`, from form probabilities pulled halfway to league outcome rates |
 | `favourite_strength` | Always `weak`: winner forecasts did not beat league outcome rates in replays |
 | `call_status` | `ok`; `no call: too close` or `no call: new players`; or why calls are withheld (`withheld: stale source`, `withheld: no league results`) |
@@ -76,7 +76,7 @@ gzip and ETag behavior.
 
 Each eligible game (fresh league, both players with at least 5 results) has a
 `safest_option`: the over/under call at the league line when it has a proven
-edge (esb8 and volta6 goal calls), otherwise its single likeliest selection
+edge (esb8, volta6 and gt12 goal calls), otherwise its single likeliest selection
 across 1X2, double chance and over/under, with `market`, `selection`, `probability`, the
 `league_rate` for that selection in this snapshot, and `proven_edge`.
 
@@ -111,7 +111,7 @@ or `null` with `no bet` advice when none beats its fair odds. `best` is `null`
 when the game's picks are withheld or the players are new.
 
 Every pick and top pick has `advice`: `play` only for a proven-edge pick
-(esb8/volta6 goals) at 60% or more, otherwise `skip (below 60%)`,
+(esb8/volta6/gt12 goals) at 60% or more, otherwise `skip (below 60%)`,
 `skip (no proven edge)` or `skip (<reason>)` when the call is withheld. With
 `lines=`, advice follows `best_available`. `?top=N` still lists N games, so
 read `advice` before playing them.
@@ -123,14 +123,14 @@ no `best`; replays showed 60%+ calls landing 72% with that game known versus
 67% without it.
 
 `playable_options` lists every over/under at 60%+ as `{selection, probability,
-min_odds}` (min_odds = fair odds), best chance first, for esb8/volta6 picks. A
+min_odds}` (min_odds = fair odds), best chance first, for esb8/volta6/gt12 picks. A
 client can decide locally: among options whose bookmaker odds exceed
 `min_odds`, take the highest `probability * odds - 1`.
 
 `top_picks` lists up to two games whose safest option is at least 60%, proven
 over/under calls first and then the likeliest, each with its `league` and safest-option fields.
 `top_picks_status` is `no top pick right now` when nothing qualifies.
-`proven_edge` is true only for over/under calls in esb8 and volta6. Replays
+`proven_edge` is true only for over/under calls in esb8, volta6 and gt12. Replays
 found model 1X2 and double-chance choices landed slightly less often than the
 league's most common result, so a likely double chance is not a proven edge.
 

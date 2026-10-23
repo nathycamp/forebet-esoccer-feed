@@ -61,8 +61,10 @@ GOAL_LINES = [line + .5 for line in range(1, 10)]
 # Picking the likeliest of the lines a bookmaker shows (e.g. 4.5 and 5.5) also
 # beat league rates in esb8 and volta6 replays (71-75% landed vs 59-60%).
 MAX_AVAILABLE_LINES = 8
-# Replays of the feed's own results showed a goals edge at the league line only here.
-TRUSTED_GOAL_LEAGUES = {"esb8", "volta6"}
+# Replays of the feed's own results showed a goals edge at the league line here
+# (2026-10-23: 60%+ calls landed esb8 71%, volta6 74%, gt12 78% vs 52-56% league
+# rates); h2hgg's calls only matched its low-scoring league rate (+6), so it stays out.
+TRUSTED_GOAL_LEAGUES = {"esb8", "volta6", "gt12"}
 # Near-even calls and players new to the feed carry no real model opinion.
 MIN_CALL_PROBABILITY = .55
 MIN_PLAYER_GAMES = 5

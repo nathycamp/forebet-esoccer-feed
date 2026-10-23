@@ -142,14 +142,15 @@ class PicksTests(unittest.TestCase):
         with patch.object(app, 'run_reader', side_effect=AssertionError('request triggered a scrape')):
             result = self.client.get('/picks').get_json()
         self.assertFalse(result['stale'])
-        esb8, gt12 = result['leagues']['esb8'], result['leagues']['gt12']
+        esb8, h2hgg = result['leagues']['esb8'], result['leagues']['h2hgg']
         self.assertEqual([pick['home_tag'] for pick in esb8], ['Alice', 'Carol'])
         alice = esb8[0]
         self.assertEqual(alice['goals_line'], 5.5)
         self.assertIn(alice['goals_call'], {'over', 'under'})
         self.assertGreaterEqual(alice['goals_probability'], .5)
         self.assertEqual(alice['goals_confidence'], 'trusted')
-        self.assertEqual(gt12[0]['goals_confidence'], 'low')
+        self.assertEqual(h2hgg[0]['goals_confidence'], 'low')
+        self.assertEqual(result['leagues']['gt12'][0]['goals_confidence'], 'trusted')
         self.assertEqual(alice['favourite'], 'Alice')
         self.assertEqual(alice['favourite_strength'], 'weak')
         self.assertEqual(alice['call_status'], 'ok')
@@ -165,7 +166,7 @@ class PicksTests(unittest.TestCase):
 
     def test_steady_delay_shifts_proven_league_kickoffs(self):
         self.set_clock('esb8', 12.4, 1.)
-        self.set_clock('gt12', 12.4, 1.)
+        self.set_clock('h2hgg', 12.4, 1.)
         result = self.client.get('/picks').get_json()
         alice = result['leagues']['esb8'][0]
         self.assertEqual(alice['call_status'], 'ok')
@@ -173,7 +174,7 @@ class PicksTests(unittest.TestCase):
         listed = datetime.fromisoformat(alice['listed_kickoff_utc'])
         self.assertEqual(datetime.fromisoformat(alice['kickoff_utc']) - listed, timedelta(minutes=12))
         self.assertIn('kickoff_adjusted_for_12_minute_delay', alice['warnings'])
-        self.assertEqual(result['leagues']['gt12'][0]['call_status'], 'withheld: stale source')
+        self.assertEqual(result['leagues']['h2hgg'][0]['call_status'], 'withheld: stale source')
 
     def test_uneven_or_thin_delay_still_withholds(self):
         for spread, fixtures in ((6., 3), (1., 1)):
@@ -283,7 +284,7 @@ class PicksTests(unittest.TestCase):
         expected = 'play' if alice['goals_probability'] >= .6 else 'skip (below 60%)'
         self.assertEqual(alice['advice'], expected)
         self.assertEqual(carol['advice'], 'skip (no call: new players)')
-        self.assertTrue(result['leagues']['gt12'][0]['advice'].startswith('skip'))
+        self.assertTrue(result['leagues']['h2hgg'][0]['advice'].startswith('skip'))
         with patch.object(app, 'TOP_PICK_MIN_PROBABILITY', 1.):
             top = self.client.get('/picks?top=2').get_json()['top_picks']
         self.assertTrue(all(pick['advice'].startswith('skip') for pick in top))
