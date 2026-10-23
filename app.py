@@ -261,6 +261,7 @@ def health():
             "last_fetch": cache["last_fetch"],
             "last_status": cache["last_status"],
             "free_proxies_ready": len(load_free_proxy_pool()),
+            "telegram": dict(telegram_bot.STATUS),
         })
 
 
@@ -886,7 +887,12 @@ def start_scheduler():
             id="free-proxy-pool",
         )
     scheduler.start()
-    bot = telegram_bot.start(app.test_client(), scheduler)
+    try:
+        bot = telegram_bot.start(app.test_client(), scheduler)
+    except Exception as exc:
+        logger.exception("Telegram bot failed to start")
+        telegram_bot.STATUS["last_error"] = f"start failed: {exc}"[:200]
+        bot = None
     if bot:
         after_refresh.append(bot.check_alerts)
     return scheduler

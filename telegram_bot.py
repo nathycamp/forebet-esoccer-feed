@@ -26,6 +26,9 @@ import urllib.request
 from datetime import datetime, timedelta, timezone
 
 logger = logging.getLogger(__name__)
+# Shown on the feed's health page so a silent bot is visible from outside.
+STATUS = {"running": False, "chats": 0, "last_poll": None, "last_error": None,
+          "alerts_sent": 0, "results_sent": 0}
 
 WAT = timezone(timedelta(hours=1))
 MIN_PROBABILITY = .60
@@ -243,6 +246,7 @@ class PickBot:
                     self.last_game[chat] = game
             with self.lock:
                 self.pending[key] = {"selection": pick["selection"], "messages": messages}
+            STATUS["alerts_sent"] += 1
             logger.info("Telegram alert sent: %s %s v %s %s (%.0f%%), kickoff %s",
                         pick["league"], pick["home_tag"], pick["away_tag"], pick["selection"],
                         pick["probability"] * 100, pick["kickoff_utc"])
@@ -277,6 +281,7 @@ class PickBot:
                     self.send(text, chat, reply_to=message_id)
                 except Exception:
                     logger.exception("Telegram result to %s failed", chat)
+            STATUS["results_sent"] += 1
             logger.info("Telegram result sent: %s %s v %s %s -> %s", league, home, away, alert["selection"],
                         final["actual_score"])
             with self.lock:
@@ -351,8 +356,10 @@ class PickBot:
         while True:
             try:
                 self.poll_once()
+                STATUS["last_poll"] = datetime.now(timezone.utc).isoformat()
             except Exception as exc:
                 # 409 means another instance (e.g. during a redeploy) is polling.
+                STATUS["last_error"] = f"{datetime.now(timezone.utc).isoformat()} {exc}"[:200]
                 logger.warning("Telegram polling paused: %s", exc)
                 time.sleep(10)
 
@@ -372,5 +379,6 @@ def start(client, scheduler=None):
     # Alerts run right after each feed read (app.after_refresh), so a pick that turns
     # "play" is sent within seconds of the read that shows it.
     threading.Thread(target=bot.poll_forever, name="telegram-poll", daemon=True).start()
+    STATUS.update(running=True, chats=len(bot.chat_ids))
     logger.info("Telegram bot on for chats %s", ", ".join(bot.chat_ids))
     return bot

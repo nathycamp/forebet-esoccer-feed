@@ -6,6 +6,7 @@ from unittest.mock import MagicMock, patch
 
 import app
 import reader
+import telegram_bot
 
 
 class ReaderServiceTests(unittest.TestCase):
@@ -93,7 +94,8 @@ class ReaderServiceTests(unittest.TestCase):
     def test_health_and_structured_fixtures(self):
         with app.app.test_client() as client, patch.object(app, "load_free_proxy_pool", return_value=["http://1.2.3.4:80"] * 5):
             self.assertEqual(client.get("/").get_json(), {
-                "status": "ok", "last_fetch": None, "last_status": "error", "free_proxies_ready": 5
+                "status": "ok", "last_fetch": None, "last_status": "error", "free_proxies_ready": 5,
+                "telegram": telegram_bot.STATUS
             })
         with patch.object(app, "run_reader", return_value={
             key: {"fixtures": [{"home_tag": "Mani", "kickoff_utc": "2026-10-18T16:55:00+00:00"}], "status": "ok"}
