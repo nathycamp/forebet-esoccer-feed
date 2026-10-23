@@ -245,6 +245,14 @@ def clear_cloudflare(page):
     return not is_challenged(page)
 
 
+def fresh_url(url, now=None):
+    """Tag a league URL per read so a cache cannot serve an old copy (CACHE_BUST=0 disables)."""
+    if os.environ.get("CACHE_BUST", "1") != "1":
+        return url
+    stamp = int((now or datetime.now(timezone.utc)).timestamp())
+    return f"{url}{'&' if '?' in url else '?'}t={stamp}"
+
+
 def visit(page, url, fixture_page=False):
     page.goto(url, wait_until="domcontentloaded", timeout=45000)
     if not clear_cloudflare(page):
@@ -545,7 +553,7 @@ def read_pages():
                         meter.label = key
                     logger.info("Reading %s at %s", key, datetime.now(timezone.utc).isoformat())
                     try:
-                        visit(page, url, fixture_page=True)
+                        visit(page, fresh_url(url), fixture_page=True)
                         fixtures = extract_fixtures(page, key)
                         observed_at = datetime.now(timezone.utc)
                         leagues[key] = {

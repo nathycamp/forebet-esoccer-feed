@@ -30,6 +30,13 @@ class ReaderServiceTests(unittest.TestCase):
         self.assertEqual(servers, ["http://h:1", "socks5://1.1.1.1:1", "http://2.2.2.2:2", "http://3.3.3.3:3"])
         fetch.assert_not_called()
 
+    def test_league_urls_are_tagged_per_read(self):
+        moment = datetime(2026, 10, 23, 12, 0, tzinfo=timezone.utc)
+        self.assertEqual(reader.fresh_url("https://x/a", moment), f"https://x/a?t={int(moment.timestamp())}")
+        self.assertEqual(reader.fresh_url("https://x/a?b=1", moment), f"https://x/a?b=1&t={int(moment.timestamp())}")
+        with patch.dict(os.environ, {"CACHE_BUST": "0"}):
+            self.assertEqual(reader.fresh_url("https://x/a", moment), "https://x/a")
+
     def test_demoted_proxy_moves_to_back_of_pool(self):
         import json, tempfile
         folder = tempfile.mkdtemp()
@@ -330,7 +337,7 @@ class ReaderServiceTests(unittest.TestCase):
                 patch.object(reader, "extract_fixtures", return_value=[]):
             launcher.return_value.__enter__.return_value = playwright
             reader.read_pages()
-        urls = [call.args[1] for call in visit.call_args_list]
+        urls = [call.args[1].split("?t=")[0] for call in visit.call_args_list]
         self.assertEqual(urls, list(reader.LEAGUES.values()))
 
     def test_hung_reader_is_killed(self):
