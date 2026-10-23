@@ -533,6 +533,12 @@ def build_picks(feed, now):
             "league_fetched_at": feed["league_fetched_at"], "leagues": leagues, "league_over_rates": over_rates}
 
 
+def pick_edge(row):
+    """Model chance minus the league's rate for the same selection."""
+    rate = row.get("league_rate")
+    return row["probability"] - rate if rate is not None else 0.
+
+
 def min_probability(league):
     return LEAGUE_MIN_PROBABILITY.get(league, TOP_PICK_MIN_PROBABILITY)
 
@@ -657,15 +663,20 @@ def picks():
         leagues[key] = rows
     payload["leagues"] = leagues
     # ?top=N ranks every eligible game; by default only options at 60%+ qualify.
-    # Proven goals calls come before other markets, then the likelier option.
-    top = sorted(candidates, key=lambda row: (row["proven_edge"], row["probability"]), reverse=True)[:top_count or TOP_PICKS]
+    # Proven goals calls first, then the biggest edge over the league's own rate for
+    # that selection: a 74% GT12 under 5.5 in a league where 70% stay under is a
+    # smaller edge (and shorter price) than a 67% volta6 under 5.5 against 50%.
+    top = sorted(candidates, key=lambda row: (row["proven_edge"], pick_edge(row), row["probability"]),
+                 reverse=True)[:top_count or TOP_PICKS]
+    for row in top:
+        row["edge"] = round(pick_edge(row), 4)
     for row in top:
         row["advice"] = play_advice(row["probability"], row["proven_edge"], floor=min_probability(row["league"]))
         row["min_probability"] = min_probability(row["league"])
         if row["advice"] == "play" and waiting(row):
             row["advice"] = "wait (previous game pending)"
     top_keys = {"league", "market", "selection", "probability", "league_rate", "proven_edge", "fair_odds", "advice",
-                "playable_options", "previous_game", "min_probability"}
+                "playable_options", "previous_game", "min_probability", "edge"}
     top = [{name: value for name, value in row.items() if (name in fields if fields is not None
             else name not in ("safest_option", "one_x_two", "double_chance")) or name in top_keys} for row in top]
     payload["top_picks"] = top

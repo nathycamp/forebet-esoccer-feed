@@ -129,7 +129,8 @@ client can decide locally: among options whose bookmaker odds exceed
 `min_odds`, take the highest `probability * odds - 1`.
 
 `top_picks` lists up to two games whose safest option is at least 60%, proven
-over/under calls first and then the likeliest, each with its `league` and safest-option fields.
+over/under calls first, then the biggest `edge` (chance minus the league's rate
+for that selection), each with its `league` and safest-option fields.
 `top_picks_status` is `no top pick right now` when nothing qualifies.
 `proven_edge` is true only for over/under calls in esb8, volta6 and gt12. Replays
 found model 1X2 and double-chance choices landed slightly less often than the

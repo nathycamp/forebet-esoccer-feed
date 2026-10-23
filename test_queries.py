@@ -323,6 +323,12 @@ class PicksTests(unittest.TestCase):
         self.assertEqual(options[0]['min_odds'], alice['goal_lines'][line][f'fair_{side}_odds'])
         self.assertEqual([o['probability'] for o in options], sorted((o['probability'] for o in options), reverse=True))
 
+    def test_top_picks_rank_by_edge_over_league_rate(self):
+        easy = {'probability': .74, 'league_rate': .70}
+        sharp = {'probability': .67, 'league_rate': .50}
+        self.assertGreater(app.pick_edge(sharp), app.pick_edge(easy))
+        self.assertEqual(app.pick_edge({'probability': .6, 'league_rate': None}), 0.)
+
     def test_gt12_needs_sixty_five_percent(self):
         self.assertEqual(app.min_probability('gt12'), .65)
         self.assertEqual(app.min_probability('esb8'), .60)
@@ -370,12 +376,13 @@ class PicksTests(unittest.TestCase):
         self.assertNotIn('leagues', result)
         top = result['top_picks']
         self.assertEqual(len(top), 2)
-        self.assertGreaterEqual((top[0]['proven_edge'], top[0]['probability']), (top[1]['proven_edge'], top[1]['probability']))
+        self.assertGreaterEqual((top[0]['proven_edge'], top[0]['edge']), (top[1]['proven_edge'], top[1]['edge']))
+        self.assertAlmostEqual(top[0]['edge'], top[0]['probability'] - top[0]['league_rate'], places=3)
         result = self.client.get('/picks?top=1&league=volta6&fields=home_tag,kickoff_utc').get_json()
         self.assertEqual(set(result['top_picks'][0]), {'home_tag', 'kickoff_utc', 'league', 'market', 'selection',
                                                        'probability', 'league_rate', 'proven_edge', 'advice',
                                                        'fair_odds', 'playable_options', 'previous_game',
-                                                       'min_probability'})
+                                                       'min_probability', 'edge'})
         self.assertEqual(result['top_picks'][0]['league'], 'volta6')
         for query in ('top=0', 'top=11', 'top=x', 'top=1&top=2'):
             with self.subTest(query=query):
