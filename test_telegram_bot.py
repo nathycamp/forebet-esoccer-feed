@@ -48,6 +48,9 @@ class FormattingTests(unittest.TestCase):
 class BotTests(unittest.TestCase):
     def setUp(self):
         test_queries.PicksTests.setUp(self)  # same sample feed as the picks tests
+        edge_rule = patch.object(app, "no_edge", return_value=False)  # sample league: one repeated 4-1 game
+        edge_rule.start()
+        self.addCleanup(edge_rule.stop)
         self.bot = telegram_bot.PickBot(app.app.test_client(), "token", "42,-100", bank=1000, min_stake=10)
         self.sent = []
 

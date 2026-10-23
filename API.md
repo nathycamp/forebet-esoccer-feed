@@ -113,7 +113,9 @@ when the game's picks are withheld or the players are new.
 Every pick and top pick has `advice`: `play` only for a proven-edge pick
 (esb8/volta6/gt12 goals) at 60% or more (65% for gt12, whose scores swing more),
 otherwise `skip (below 60%)` / `skip (below 65%)`,
-`skip (no proven edge)` or `skip (<reason>)` when the call is withheld. With
+`skip (no proven edge)`, `skip (no edge over league average)` (the pick is no
+likelier than the league's own rate for it) or `skip (<reason>)` when the call
+is withheld. With
 `lines=`, advice follows `best_available`. `?top=N` still lists N games, so
 read `advice` before playing them.
 

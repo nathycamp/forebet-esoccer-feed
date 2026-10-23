@@ -590,7 +590,18 @@ def play_advice(probability, proven, status="ok", floor=TOP_PICK_MIN_PROBABILITY
 
 def row_advice(row, league, lines):
     advice = base_advice(row, league, lines)
+    option = row.get("best_available") if lines else row.get("safest_option")
+    if advice == "play" and option and no_edge(option):
+        return NO_EDGE
     return "wait (previous game pending)" if advice == "play" and waiting(row) else advice
+
+
+NO_EDGE = "skip (no edge over league average)"
+
+
+def no_edge(option):
+    """A pick no likelier than the league's own rate for it has nothing for the model to add."""
+    return option.get("league_rate") is not None and pick_edge(option) <= 0
 
 
 def base_advice(row, league, lines):
@@ -712,6 +723,8 @@ def picks():
     for row in top:
         row["advice"] = play_advice(row["probability"], row["proven_edge"], floor=min_probability(row["league"]))
         row["min_probability"] = min_probability(row["league"])
+        if row["advice"] == "play" and no_edge(row):
+            row["advice"] = NO_EDGE
         if row["advice"] == "play" and waiting(row):
             row["advice"] = "wait (previous game pending)"
     top_keys = {"league", "market", "selection", "probability", "league_rate", "proven_edge", "fair_odds", "advice",

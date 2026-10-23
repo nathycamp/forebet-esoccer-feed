@@ -275,7 +275,8 @@ class PicksTests(unittest.TestCase):
             with self.subTest(query=query):
                 self.assertEqual(self.client.get('/picks/choose?'+query).status_code, 400)
 
-    def test_advice_plays_only_proven_picks_at_sixty_percent(self):
+    @patch.object(app, 'no_edge', return_value=False)  # the sample league is one repeated 4-1 game
+    def test_advice_plays_only_proven_picks_at_sixty_percent(self, _):
         self.assertEqual(app.play_advice(.65, True), 'play')
         self.assertEqual(app.play_advice(.58, True), 'skip (below 60%)')
         self.assertEqual(app.play_advice(.70, False), 'skip (no proven edge)')
@@ -290,7 +291,8 @@ class PicksTests(unittest.TestCase):
             top = self.client.get('/picks?top=2').get_json()['top_picks']
         self.assertTrue(all(pick['advice'].startswith('skip') for pick in top))
 
-    def test_pick_waits_until_players_previous_game_is_half_played(self):
+    @patch.object(app, 'no_edge', return_value=False)
+    def test_pick_waits_until_players_previous_game_is_half_played(self, _):
         def set_previous(status, clock=None):
             with app.cache_lock:
                 rows = app.cache['leagues']['esb8']['fixtures']
@@ -334,6 +336,14 @@ class PicksTests(unittest.TestCase):
         self.assertTrue(alice['selection'].endswith(('4.5', '5.5')))
         self.assertAlmostEqual(alice['edge'], alice['probability'] - next(
             p for p in result['leagues']['esb8'] if p['home_tag'] == 'Alice')['best_available']['league_rate'], places=3)
+
+    def test_negative_edge_is_never_play(self):
+        self.assertTrue(app.no_edge({'probability': .66, 'league_rate': .69}))
+        self.assertFalse(app.no_edge({'probability': .66, 'league_rate': .50}))
+        self.assertFalse(app.no_edge({'probability': .66, 'league_rate': None}))
+        with patch.object(app, 'pick_edge', return_value=-.03):
+            result = self.client.get('/picks?top=2').get_json()
+        self.assertTrue(all(p['advice'] != 'play' for p in result['top_picks']))
 
     def test_top_picks_rank_by_edge_over_league_rate(self):
         easy = {'probability': .74, 'league_rate': .70}
