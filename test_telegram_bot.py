@@ -13,6 +13,12 @@ class FormattingTests(unittest.TestCase):
         self.assertEqual(telegram_bot.kelly_stake(.50, 1.80, 1000), 0.)
         self.assertEqual(telegram_bot.kelly_stake(.70, 1.55, None), 0.)
 
+    def test_playable_text_skips_near_certain_low_odds_lines(self):
+        options = [{"selection": "over 1.5", "probability": .99, "min_odds": 1.01},
+                   {"selection": "over 4.5", "probability": .73, "min_odds": 1.37}]
+        self.assertEqual(telegram_bot.playable_text(options), "o4.5 >1.37 (73%)")
+        self.assertEqual(telegram_bot.playable_text([]), "none")
+
     def test_odds_text_is_read_in_any_common_form(self):
         self.assertEqual(telegram_bot.parse_odds_text("o4.5 1.55 u5.5:1.70 Over 6.5 @2.1"),
                          "over4.5:1.55,under5.5:1.70,over6.5:2.1")
@@ -42,6 +48,7 @@ class BotTests(unittest.TestCase):
             self.assertEqual(self.bot.check_alerts(), 0)
         self.assertIn("PLAY", self.sent[0])
         self.assertIn("Alice v Bob", self.sent[0])
+        self.assertIn("Playable (60%+", self.sent[0])
         self.assertEqual(self.bot.alert_games[1], ("esb8", "Alice", "Bob"))
 
     def test_skip_picks_are_not_alerted(self):

@@ -64,6 +64,13 @@ def format_lines(goal_lines, around):
     return " · ".join(shown)
 
 
+def playable_text(options, limit=5):
+    """'o4.5 >1.37 (73%) · u7.5 >1.41 (71%)' for the most useful 60%+ options."""
+    useful = [option for option in options or [] if option["min_odds"] >= 1.15][:limit]
+    return " · ".join(f"{option['selection'][0]}{option['selection'].split()[1]} >{option['min_odds']} "
+                      f"({option['probability']:.0%})" for option in useful) or "none"
+
+
 def alert_text(pick):
     line = float(pick["selection"].split()[-1])
     return (
@@ -72,6 +79,7 @@ def alert_text(pick):
         f"<b>{pick['selection'].capitalize()}</b> — {pick['probability']:.0%} "
         f"(league {pick['league_rate']:.0%}), expected goals {pick['expected_goals']}\n"
         f"Bet only if odds are above <b>{pick['fair_odds']}</b>\n"
+        f"Playable (60%+, bet if odds above): {playable_text(pick.get('playable_options'))}\n"
         f"Lines: {format_lines(pick.get('goal_lines'), line)}\n"
         f"↩️ Reply with your odds, e.g. <code>o4.5 1.55 u5.5 1.70</code>"
     )

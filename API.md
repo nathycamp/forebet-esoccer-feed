@@ -116,6 +116,17 @@ Every pick and top pick has `advice`: `play` only for a proven-edge pick
 `lines=`, advice follows `best_available`. `?top=N` still lists N games, so
 read `advice` before playing them.
 
+`previous_game` is the players' latest unfinished game before this kickoff
+(`status`, `score`, `played_share` 0-1) or `null`. While it is under half
+played, `advice` is `wait (previous game pending)` and `/picks/choose` returns
+no `best`; replays showed 60%+ calls landing 72% with that game known versus
+67% without it.
+
+`playable_options` lists every over/under at 60%+ as `{selection, probability,
+min_odds}` (min_odds = fair odds), best chance first, for esb8/volta6 picks. A
+client can decide locally: among options whose bookmaker odds exceed
+`min_odds`, take the highest `probability * odds - 1`.
+
 `top_picks` lists up to two games whose safest option is at least 60%, proven
 over/under calls first and then the likeliest, each with its `league` and safest-option fields.
 `top_picks_status` is `no top pick right now` when nothing qualifies.

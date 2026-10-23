@@ -19,6 +19,8 @@ from flask import Flask, Response, jsonify, request
 
 import telegram_bot
 from prediction_engine import MODEL_VERSION, predict_feed
+from prediction_engine.model import tag
+from prediction_engine.validation import LEAGUES as LEAGUE_MINUTES, utc as parse_time
 from reader import LEAGUES, demote_last_proxy, load_free_proxy_pool, refresh_free_proxy_pool
 
 
@@ -50,7 +52,7 @@ PICK_FIELDS = {
     "favourite_strength", "call_status", "warnings",
     "one_x_two", "double_chance", "winner_markets_trust", "safest_option",
     "goal_lines", "kickoff_adjusted_minutes", "listed_kickoff_utc", "best_available",
-    "advice",
+    "advice", "previous_game", "playable_options",
 }
 GOAL_LINES = [line + .5 for line in range(1, 10)]
 # Picking the likeliest of the lines a bookmaker shows (e.g. 4.5 and 5.5) also
@@ -74,6 +76,9 @@ DELAY_MIN_FIXTURES = 2
 DELAY_MAX_SPREAD_MINUTES = 3
 DELAY_MAX_MINUTES = 45
 TOP_PICK_MIN_PROBABILITY = .60
+# Replays: 60%+ calls landed 72% when each player's latest game was known, 67% when
+# it was not, so a pick waits until any earlier game of its players is half played.
+PREVIOUS_GAME_MIN_SHARE = .5
 TOP_PICKS = 2
 picks_lock = threading.Lock()
 picks_cache = {"key": None, "result": None}
@@ -394,6 +399,44 @@ def adjust_delays(feed):
     return feed, delays
 
 
+def previous_game(rows, pick, duration):
+    """The players' latest unfinished game before this kickoff, with the share already played."""
+    players = {tag(pick["home_tag"]), tag(pick["away_tag"])}
+    kickoff = parse_time(pick["kickoff_utc"])
+    earliest = kickoff - timedelta(minutes=2 * duration + 15)
+    pending = []
+    for row in rows:
+        try:
+            start = parse_time(row["kickoff_utc"])
+        except (KeyError, ValueError, TypeError):
+            continue
+        if (row.get("status") not in ("upcoming", "live") or not earliest <= start < kickoff
+                or not players & {tag(row.get("home_tag", "")), tag(row.get("away_tag", ""))}):
+            continue
+        clock = str(row.get("match_clock") or "").strip().rstrip("'′")
+        share = min(int(clock), duration) / duration if row["status"] == "live" and clock.isdigit() else 0.
+        pending.append({"kickoff_utc": row["kickoff_utc"], "home_tag": row.get("home_tag"),
+                        "away_tag": row.get("away_tag"), "status": row["status"],
+                        "score": row.get("live_score"), "played_share": round(share, 2)})
+    return min(pending, key=lambda game: game["played_share"]) if pending else None
+
+
+def playable_options(goal_lines_table):
+    """Every over/under at 60%+ with the lowest odds worth taking (its fair odds)."""
+    options = []
+    for line, chances in (goal_lines_table or {}).items():
+        for side in ("over", "under"):
+            if chances[side] >= TOP_PICK_MIN_PROBABILITY and chances[f"fair_{side}_odds"]:
+                options.append({"selection": f"{side} {line}", "probability": chances[side],
+                                "min_odds": chances[f"fair_{side}_odds"]})
+    return sorted(options, key=lambda option: option["probability"], reverse=True)
+
+
+def waiting(row):
+    game = row.get("previous_game")
+    return bool(game) and game["played_share"] < PREVIOUS_GAME_MIN_SHARE
+
+
 def build_picks(feed, now):
     """Goal calls at each league's usual line, with a weak favourite as context."""
     feed, delays = adjust_delays(feed)
@@ -431,7 +474,8 @@ def build_picks(feed, now):
                                            "X2": round(winner["X"] + winner["2"], 4),
                                            "12": round(winner["1"] + winner["2"], 4)},
                          "winner_markets_trust": "not trusted: did not beat league rates in replays",
-                         "safest_option": None, "goal_lines": None})
+                         "safest_option": None, "goal_lines": None, "playable_options": []})
+            pick["previous_game"] = previous_game(rows, pick, LEAGUE_MINUTES[key])
             if key in delays:
                 pick["kickoff_adjusted_minutes"] = delays[key]
                 pick["listed_kickoff_utc"] = listed.get((key, pick["home_tag"], pick["away_tag"], pick["kickoff_utc"]))
@@ -455,6 +499,8 @@ def build_picks(feed, now):
                     pick["goals_call"] = "over" if over >= .5 else "under"
                 if history >= MIN_PLAYER_GAMES:
                     pick["safest_option"] = safest_option(pick, winner, rates, over, over_rate, key)
+                    if key in TRUSTED_GOAL_LEAGUES:
+                        pick["playable_options"] = playable_options(pick["goal_lines"])
             picks.append(pick)
         leagues[key] = picks
     return {"generated_at": forecasts["generated_at"], "source_fetched_at": feed["fetched_at"],
@@ -476,6 +522,11 @@ def play_advice(probability, proven, status="ok"):
 
 
 def row_advice(row, league, lines):
+    advice = base_advice(row, league, lines)
+    return "wait (previous game pending)" if advice == "play" and waiting(row) else advice
+
+
+def base_advice(row, league, lines):
     if lines:
         best = row.get("best_available")
         if row["call_status"] == "no call: new players" or row["call_status"].startswith("withheld"):
@@ -582,7 +633,10 @@ def picks():
     top = sorted(candidates, key=lambda row: (row["proven_edge"], row["probability"]), reverse=True)[:top_count or TOP_PICKS]
     for row in top:
         row["advice"] = play_advice(row["probability"], row["proven_edge"])
-    top_keys = {"league", "market", "selection", "probability", "league_rate", "proven_edge", "fair_odds", "advice"}
+        if row["advice"] == "play" and waiting(row):
+            row["advice"] = "wait (previous game pending)"
+    top_keys = {"league", "market", "selection", "probability", "league_rate", "proven_edge", "fair_odds", "advice",
+                "playable_options", "previous_game"}
     top = [{name: value for name, value in row.items() if (name in fields if fields is not None
             else name not in ("safest_option", "one_x_two", "double_chance")) or name in top_keys} for row in top]
     payload["top_picks"] = top
@@ -679,6 +733,8 @@ def choose():
     # "too close" only concerns the league line; other offered lines can still be chosen.
     usable = pick["call_status"] != "no call: new players" and not pick["call_status"].startswith("withheld")
     best, advice = None, pick["call_status"]
+    if usable and waiting(pick):
+        usable, advice = False, "wait (previous game pending)"
     if usable and options:
         if odds:
             priced = [option for option in options if "value" in option]

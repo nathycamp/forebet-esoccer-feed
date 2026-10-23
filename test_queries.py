@@ -288,6 +288,39 @@ class PicksTests(unittest.TestCase):
             top = self.client.get('/picks?top=2').get_json()['top_picks']
         self.assertTrue(all(pick['advice'].startswith('skip') for pick in top))
 
+    def test_pick_waits_until_players_previous_game_is_half_played(self):
+        def set_previous(status, clock=None):
+            with app.cache_lock:
+                rows = app.cache['leagues']['esb8']['fixtures']
+                rows[:] = [row for row in rows if row['home_tag'] != 'Bob' or row['away_tag'] != 'Zed']
+                rows.append({'home_tag': 'Bob', 'away_tag': 'Zed', 'home_club': 'X', 'away_club': 'Y', 'status': status,
+                             'kickoff_utc': (self.now + timedelta(minutes=2)).isoformat(), 'actual_score': None,
+                             'live_score': '1-0' if status == 'live' else None, 'match_clock': clock,
+                             'p1': 40, 'px': 20, 'p2': 40})
+                app.cache['fetched_at'] = app.cache['leagues']['esb8']['fetched_at'] = datetime.now(timezone.utc).isoformat()
+            with app.picks_lock:
+                app.picks_cache.update({'key': None, 'result': None})
+            return self.client.get('/picks?league=esb8').get_json()['leagues']['esb8']
+        with patch.object(app, 'play_advice', return_value='play'):
+            alice = next(p for p in set_previous('upcoming') if p['home_tag'] == 'Alice')
+            self.assertEqual(alice['previous_game']['played_share'], 0)
+            self.assertEqual(alice['advice'], 'wait (previous game pending)')
+            choose = self.client.get('/picks/choose?league=esb8&home=Alice&away=Bob&lines=4.5').get_json()
+            self.assertIsNone(choose['best'])
+            self.assertEqual(choose['advice'], 'wait (previous game pending)')
+            alice = next(p for p in set_previous('live', "4'") if p['home_tag'] == 'Alice')
+            self.assertEqual(alice['previous_game']['played_share'], .5)
+            self.assertEqual(alice['advice'], 'play')
+
+    def test_playable_options_list_every_sixty_percent_line(self):
+        alice = self.client.get('/picks?league=esb8').get_json()['leagues']['esb8'][0]
+        options = alice['playable_options']
+        self.assertTrue(options)
+        self.assertTrue(all(option['probability'] >= .6 for option in options))
+        side, line = options[0]['selection'].split()
+        self.assertEqual(options[0]['min_odds'], alice['goal_lines'][line][f'fair_{side}_odds'])
+        self.assertEqual([o['probability'] for o in options], sorted((o['probability'] for o in options), reverse=True))
+
     def test_goal_lines_give_every_line_with_fair_odds(self):
         pick = self.client.get('/picks?league=esb8').get_json()['leagues']['esb8'][0]
         lines = pick['goal_lines']
@@ -322,7 +355,7 @@ class PicksTests(unittest.TestCase):
         result = self.client.get('/picks?top=1&league=volta6&fields=home_tag,kickoff_utc').get_json()
         self.assertEqual(set(result['top_picks'][0]), {'home_tag', 'kickoff_utc', 'league', 'market', 'selection',
                                                        'probability', 'league_rate', 'proven_edge', 'advice',
-                                                       'fair_odds'})
+                                                       'fair_odds', 'playable_options', 'previous_game'})
         self.assertEqual(result['top_picks'][0]['league'], 'volta6')
         for query in ('top=0', 'top=11', 'top=x', 'top=1&top=2'):
             with self.subTest(query=query):
