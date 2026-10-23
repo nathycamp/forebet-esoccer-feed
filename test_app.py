@@ -207,6 +207,12 @@ class ReaderServiceTests(unittest.TestCase):
         corrected = dict(live, kickoff_utc=(now-timedelta(minutes=4)).isoformat())
         self.assertEqual(reader.check_live_clock([corrected], now)["status"], "consistent")
         self.assertEqual(reader.check_live_clock([], now)["status"], "unverified_no_live_clock")
+        frozen = {"home_tag": "Dreamer", "away_tag": "Groma", "status": "live", "match_clock": "4",
+                  "kickoff_utc": (now - timedelta(minutes=18)).isoformat()}
+        later = {"home_tag": "Groma", "away_tag": "bucho55", "status": "live", "match_clock": "3",
+                 "kickoff_utc": (now - timedelta(minutes=9)).isoformat()}
+        unfrozen = reader.check_live_clock([frozen, later], now, 6)
+        self.assertEqual((unfrozen["live_fixtures_checked"], unfrozen["status"]), (1, "consistent"))
         awaiting_ft = {"status": "live", "match_clock": "12",
                        "kickoff_utc": (now-timedelta(minutes=25)).isoformat()}
         self.assertEqual(reader.check_live_clock([awaiting_ft], now, 12)["status"], "unverified_no_live_clock")

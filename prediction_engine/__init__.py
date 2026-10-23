@@ -82,5 +82,10 @@ def live_evidence(rows, now, duration):
         if (row["status"] != "live" or not row.get("live_score") or not clock.isdigit()
                 or int(clock) < 1 or utc(row["kickoff_utc"]) >= now):
             continue
+        # Forebet sometimes serves a stale row as live after the players moved on.
+        players = {tag(row["home_tag"]), tag(row["away_tag"])}
+        if any(utc(other["kickoff_utc"]) > utc(row["kickoff_utc"]) and other["status"] in ("live", "played")
+               and players & {tag(other["home_tag"]), tag(other["away_tag"])} for other in rows):
+            continue
         live.append((row, min(int(clock), duration) / duration))
     return live

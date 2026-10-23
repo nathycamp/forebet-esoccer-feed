@@ -154,6 +154,14 @@ def extract_fixtures(page, league):
     return fixtures
 
 
+def superseded(row, fixtures):
+    """A 'live' row is frozen when either player already has a later game live or played."""
+    players = {" ".join(str(row.get(side, "")).casefold().split()) for side in ("home_tag", "away_tag")}
+    return any(other["kickoff_utc"] > row["kickoff_utc"] and other.get("status") in ("live", "played")
+               and players & {" ".join(str(other.get(side, "")).casefold().split()) for side in ("home_tag", "away_tag")}
+               for other in fixtures)
+
+
 def check_live_clock(fixtures, observed_at, duration=None):
     """Detect clock drift without guessing a new offset or making requests.
 
@@ -164,7 +172,8 @@ def check_live_clock(fixtures, observed_at, duration=None):
     last_minute = duration - 1 if duration else 20
     for row in fixtures:
         clock = str(row.get("match_clock") or "").strip().rstrip("'′")
-        if row["status"] != "live" or not clock.isdigit() or not 0 <= int(clock) <= last_minute:
+        if (row["status"] != "live" or not clock.isdigit() or not 0 <= int(clock) <= last_minute
+                or superseded(row, fixtures)):
             continue
         kickoff = datetime.fromisoformat(row["kickoff_utc"])
         residuals.append((observed_at-kickoff).total_seconds()/60-int(clock))
