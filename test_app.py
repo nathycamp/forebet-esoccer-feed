@@ -31,6 +31,42 @@ class ReaderServiceTests(unittest.TestCase):
         self.assertEqual(servers, ["http://h:1", "socks5://1.1.1.1:1", "http://2.2.2.2:2", "http://3.3.3.3:3"])
         fetch.assert_not_called()
 
+    def test_slow_proxy_is_benched_and_missed_leagues_retried(self):
+        import tempfile
+        folder = tempfile.mkdtemp()
+        reads = []
+
+        def visit(page, url, fixture_page=False):
+            reads.append((proxies[-1], url))
+            if proxies[-1] == "socks5://slow:1" and "volta" in url:
+                raise TimeoutError("Page.goto: Timeout 45000ms exceeded.")
+
+        proxies = []
+        playwright = MagicMock()
+        playwright.__enter__.return_value.chromium.launch_persistent_context.side_effect = \
+            lambda *args, proxy, **kwargs: proxies.append(proxy["server"]) or MagicMock(pages=[MagicMock()])
+        environment = {"PROXY_SOURCE": "proxifly", "FREE_PROXY_SEEDS": "socks5://slow:1", "READER_TIMEOUT_SECONDS": "150"}
+        with patch.dict(os.environ, environment), \
+                patch.object(reader, "LAST_PROXY_FILE", f"{folder}/last"), \
+                patch.object(reader, "BENCH_FILE", f"{folder}/bench.json"), \
+                patch.object(reader, "load_free_proxy_pool", return_value=["http://fast:2"]), \
+                patch.object(reader, "free_proxies", return_value=[]), \
+                patch.object(reader, "sync_playwright", return_value=playwright), \
+                patch.object(reader, "ByteMeter"), patch.object(reader, "block_forebet_assets"), \
+                patch.object(reader, "visit", side_effect=visit), \
+                patch.object(reader, "extract_fixtures", return_value=[]), \
+                patch.object(reader, "check_live_clock", return_value={}):
+            leagues = reader.read_pages()
+            self.assertEqual({page["status"] for page in leagues.values()}, {"ok"})
+            self.assertEqual(proxies, ["socks5://slow:1", "http://fast:2"])
+            # The second proxy only reads what the first missed.
+            league_reads = [url for proxy, url in reads if proxy == "http://fast:2" and "/esoccer/" in url]
+            self.assertEqual(len(league_reads), 1)
+            self.assertIn("volta", league_reads[0])
+            self.assertIn("socks5://slow:1", reader.load_bench())
+            # Next cycle the benched seed goes behind the working proxy.
+            self.assertEqual([proxy["server"] for proxy in reader.proxy_candidates()][:2], ["http://fast:2", "socks5://slow:1"])
+
     def test_league_urls_are_tagged_per_read(self):
         moment = datetime(2026, 10, 23, 12, 0, tzinfo=timezone.utc)
         self.assertEqual(reader.fresh_url("https://x/a", moment), f"https://x/a?t={int(moment.timestamp())}")

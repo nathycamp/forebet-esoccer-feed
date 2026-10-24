@@ -328,6 +328,12 @@ class ByteMeter:
 PROXY_LIST_URL = "https://raw.githubusercontent.com/proxifly/free-proxy-list/main/proxies/countries/US/data.txt"
 LAST_PROXY_FILE = os.environ.get("LAST_PROXY_FILE", "/tmp/forebet-last-proxy")
 FREE_PROXY_POOL_FILE = os.environ.get("FREE_PROXY_POOL_FILE", "/tmp/forebet-free-proxies.json")
+# A free proxy that times out on league pages sits out this long, seeds included.
+BENCH_FILE = os.environ.get("PROXY_BENCH_FILE", "/tmp/forebet-proxy-bench.json")
+BENCH_MINUTES = int(os.environ.get("PROXY_BENCH_MINUTES", "20"))
+# Missed leagues are retried through the next proxy only while this much of the
+# app's reader timeout is left, so a retry never costs the leagues already read.
+RETRY_RESERVE_SECONDS = 60
 MAX_PROXY_ATTEMPTS = 3
 MIN_FREE_PROXIES = 5
 
@@ -443,8 +449,42 @@ def proxy_candidates():
             servers += free_proxies(exclude=set(servers))
         except Exception:
             logger.exception("Could not load the free proxy list")
-    for server in list(dict.fromkeys(filter(None, servers)))[:MAX_PROXY_ATTEMPTS]:
+    servers = list(dict.fromkeys(filter(None, servers)))
+    benched = load_bench()
+    # Benched proxies go last rather than vanish, in case nothing else works.
+    servers = [server for server in servers if server not in benched] + [server for server in servers if server in benched]
+    for server in servers[:MAX_PROXY_ATTEMPTS]:
         yield {"server": server}
+
+
+def load_bench(now=None):
+    """Free proxies benched for timing out, with when each may be used again."""
+    now = now or datetime.now(timezone.utc).timestamp()
+    try:
+        with open(BENCH_FILE) as handle:
+            return {server: until for server, until in json.load(handle).items() if until > now}
+    except (OSError, ValueError, AttributeError):
+        return {}
+
+
+def bench_proxy(server, now=None):
+    now = now or datetime.now(timezone.utc).timestamp()
+    bench = load_bench(now)
+    bench[server] = now + BENCH_MINUTES * 60
+    try:
+        temporary = BENCH_FILE + ".tmp"
+        with open(temporary, "w") as handle:
+            json.dump(bench, handle)
+        os.replace(temporary, BENCH_FILE)
+    except OSError:
+        logger.exception("Could not bench proxy")
+    if os.path.exists(LAST_PROXY_FILE):
+        try:
+            with open(LAST_PROXY_FILE) as handle:
+                if handle.read().strip() == server:
+                    os.remove(LAST_PROXY_FILE)
+        except OSError:
+            pass
 
 
 def drop_free_proxy(server):
@@ -492,6 +532,8 @@ def read_pages():
     retry = os.environ.get("PROXY_SOURCE", "auto") != "shifter"
     leagues = {}
     proxy = None
+    started = datetime.now(timezone.utc)
+    budget = int(os.environ.get("READER_TIMEOUT_SECONDS", "100")) - RETRY_RESERVE_SECONDS
     profile = os.environ.get("BROWSER_PROFILE_DIR", "/tmp/forebet-chrome-profile")
     os.makedirs(profile, exist_ok=True)
     with sync_playwright() as playwright:
@@ -549,6 +591,8 @@ def read_pages():
                             continue
                         logger.exception("Homepage visit failed; continuing with league pages")
                 for key, url in LEAGUES.items():
+                    if leagues.get(key, {}).get("status") == "ok":
+                        continue  # read through an earlier proxy this cycle
                     if meter:
                         meter.label = key
                     logger.info("Reading %s at %s", key, datetime.now(timezone.utc).isoformat())
@@ -572,6 +616,14 @@ def read_pages():
                     except Exception:
                         logger.exception("Could not log network bytes")
                 context.close()
+            missed = [key for key in LEAGUES if leagues.get(key, {}).get("status") != "ok"]
+            elapsed = (datetime.now(timezone.utc) - started).total_seconds()
+            if missed and "username" not in proxy:
+                bench_proxy(proxy["server"])
+                if can_retry and number < MAX_PROXY_ATTEMPTS and elapsed < budget:
+                    logger.warning("%s missed %s; benched for %d min, retrying them through the next proxy",
+                                   proxy["server"], ",".join(missed), BENCH_MINUTES)
+                    continue
             break
     if proxy and "username" not in proxy:
         read_any = any(page.get("status") == "ok" for page in leagues.values())
