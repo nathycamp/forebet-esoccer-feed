@@ -57,7 +57,7 @@ PICK_FIELDS = {
     "goal_lines", "kickoff_adjusted_minutes", "listed_kickoff_utc", "best_available",
     "advice", "previous_game", "playable_options",
 }
-GOAL_LINES = [line + .5 for line in range(1, 10)]
+GOAL_LINES = [line + .5 for line in range(0, 10)]
 # Picking the likeliest of the lines a bookmaker shows (e.g. 4.5 and 5.5) also
 # beat league rates in esb8 and volta6 replays (71-75% landed vs 59-60%).
 MAX_AVAILABLE_LINES = 8
@@ -401,7 +401,7 @@ def goal_lines(totals):
     """Over/under chances and fair odds at every x.5 line, to compare with a bookmaker's prices."""
     lines = {}
     for line, value in sorted(totals.items(), key=lambda item: float(item[0])):
-        if float(line) % 1 != .5 or not 1.5 <= float(line) <= 9.5:
+        if float(line) % 1 != .5 or not .5 <= float(line) <= 9.5:
             continue
         over = value["over"]
         lines[line] = {"over": round(over, 4), "under": round(1 - over, 4),
@@ -623,7 +623,7 @@ def parse_lines(value):
     except ValueError:
         lines = []
     if not lines or len(lines) > MAX_AVAILABLE_LINES or any(line not in GOAL_LINES for line in lines):
-        raise ValueError("lines must be up to 8 comma-separated x.5 goal lines from 1.5 to 9.5, e.g. lines=4.5,5.5")
+        raise ValueError("lines must be up to 8 comma-separated x.5 goal lines from 0.5 to 9.5, e.g. lines=4.5,5.5")
     return lines
 
 
@@ -754,7 +754,7 @@ def parse_selection(text):
             if line in GOAL_LINES:
                 return side, line
             break
-    raise ValueError(f"Invalid selection {text!r}; use e.g. over4.5 or under5.5 with an x.5 line from 1.5 to 9.5")
+    raise ValueError(f"Invalid selection {text!r}; use e.g. over4.5 or under5.5 with an x.5 line from 0.5 to 9.5")
 
 
 def parse_odds(value):

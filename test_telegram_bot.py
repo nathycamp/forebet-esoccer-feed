@@ -13,13 +13,15 @@ class FormattingTests(unittest.TestCase):
         self.assertEqual(telegram_bot.kelly_stake(.50, 1.80, 1000), 0.)
         self.assertEqual(telegram_bot.kelly_stake(.70, 1.55, None), 0.)
 
-    def test_other_options_skip_the_best_and_near_certain_lines(self):
-        options = [{"selection": "over 1.5", "probability": .99, "min_odds": 1.01},
-                   {"selection": "over 4.5", "probability": .73, "min_odds": 1.37},
-                   {"selection": "under 7.5", "probability": .71, "min_odds": 1.41}]
-        self.assertEqual(telegram_bot.other_options(options, "over 4.5"),
-                         "• UNDER 7.5 goals — 71% — odds above 1.41")
-        self.assertEqual(telegram_bot.other_options([], "over 4.5"), "")
+    def test_lines_table_lists_every_line_and_marks_the_good_ones(self):
+        lines = {"0.5": {"over": .99, "under": .01, "fair_over_odds": 1.01, "fair_under_odds": 100.},
+                 "4.5": {"over": .73, "under": .27, "fair_over_odds": 1.37, "fair_under_odds": 3.7},
+                 "9.5": {"over": .01, "under": .99, "fair_over_odds": 100., "fair_under_odds": 1.01}}
+        table = telegram_bot.lines_table(lines, .60, "over 4.5")
+        self.assertIn(" 0.5 ✓ 99% >1.01     1%   —  ", table)
+        self.assertIn(" 4.5 ★ 73% >1.37    27% >3.70", table)
+        self.assertNotIn("9.5", table)
+        self.assertEqual(telegram_bot.lines_table({}, .60, "over 4.5"), "")
 
     def test_board_text_shows_ready_and_waiting_games(self):
         board = [{"league": "gt12", "kickoff_utc": "2026-10-23T19:15:00+00:00", "home_tag": "David", "away_tag": "Eros",

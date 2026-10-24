@@ -268,7 +268,7 @@ class LeagueModel:
         expected_home = sum(h * p for h, a, p in matrix)
         expected_away = sum(a * p for h, a, p in matrix)
         totals = {}
-        for line in (1.5, 2.5, 3.5, 4.5, 5.5, 6.5, 7.5, 8.5):
+        for line in (0.5, 1.5, 2.5, 3.5, 4.5, 5.5, 6.5, 7.5, 8.5):
             over = sum(p for h, a, p in matrix if h + a > line)
             totals[str(line)] = {"over": round(over, 6), "under": round(1 - over, 6)}
         btts = sum(p for h, a, p in matrix if h > 0 and a > 0)

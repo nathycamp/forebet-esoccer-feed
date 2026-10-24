@@ -74,16 +74,24 @@ def bet_name(selection):
     return selection
 
 
-def other_options(options, best, limit=3):
-    """Other 60%+ options worth a look (skipping near-certain, tiny-price ones)."""
-    useful = [option for option in options or []
-              if option["selection"] != best and option["min_odds"] >= 1.15][:limit]
-    return "\n".join(f"• {bet_name(option['selection'])} — {option['probability']:.0%} — odds above {option['min_odds']}"
-                     for option in useful)
+def lines_table(goal_lines, floor, best):
+    """Every goal line 0.5-8.5 with both sides' chance and the lowest odds worth taking."""
+    def cell(selection, chance, odds):
+        mark = "★" if selection == best else "✓" if chance >= floor else " "
+        price = f">{odds:.2f}" if odds and chance >= .1 else "  —  "
+        return f"{mark}{chance:>4.0%} {price}"
+    rows = [f"{float(line):>4} {cell(f'over {line}', chances['over'], chances['fair_over_odds'])}"
+            f"  {cell(f'under {line}', chances['under'], chances['fair_under_odds'])}"
+            for line, chances in sorted((goal_lines or {}).items(), key=lambda item: float(item[0]))
+            if float(line) <= 8.5]
+    if not rows:
+        return ""
+    return ("<pre>Goals  Over        Under\n" + "\n".join(rows) + "</pre>\n"
+            f"★ best bet · ✓ {floor:.0%}+ chance · bet only above the odds shown")
 
 
 def alert_text(pick):
-    others = other_options(pick.get("playable_options"), pick["selection"])
+    table = lines_table(pick.get("goal_lines"), pick.get("min_probability", MIN_PROBABILITY), pick["selection"])
     return (
         f"⚽ <b>BET ALERT</b> — {LEAGUE_NAMES.get(pick['league'], pick['league'])}\n"
         f"🕐 Kickoff <b>{wat(pick['kickoff_utc'])}</b> (Lagos time)\n"
@@ -91,7 +99,7 @@ def alert_text(pick):
         f"✅ Best bet: <b>{bet_name(pick['selection'])}</b>\n"
         f"📊 Chance: <b>{pick['probability']:.0%}</b>\n"
         f"💰 Only bet if odds are <b>above {pick['fair_odds']}</b>\n"
-        + (f"\nOther good options:\n{others}\n" if others else "")
+        + (f"\nAll options:\n{table}\n" if table else "")
         + "\n↩️ Reply with the odds you see to check, e.g. <code>u5.5 1.50</code>"
     )
 

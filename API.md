@@ -80,7 +80,7 @@ edge (esb8, volta6 and gt12 goal calls), otherwise its single likeliest selectio
 across 1X2, double chance and over/under, with `market`, `selection`, `probability`, the
 `league_rate` for that selection in this snapshot, and `proven_edge`.
 
-`goal_lines` gives every x.5 line from 1.5 to 9.5 with the model's `over` and
+`goal_lines` gives every x.5 line from 0.5 to 8.5 with the model's `over` and
 `under` chances and the matching `fair_over_odds` / `fair_under_odds` (1 ÷
 chance). A bookmaker price above the fair odds is better value than the model
 expects; only the league line itself has a replay-proven edge.
