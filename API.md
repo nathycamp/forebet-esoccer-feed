@@ -46,9 +46,11 @@ p1,px,p2,pred,correct_score,avg_goals,status,actual_score,live_score,match_clock
 ```
 
 Top-level freshness and source metadata remain present. Per-league metadata
-includes only selected leagues. `stale` remains a conservative overall-reader
-indicator, including failed reads and clock inconsistencies; filters do not
-hide reader problems. The documented kickoff correction is already applied
+includes only selected leagues. `stale` is true when the last reader
+cycle read no league, any selected league is older than 6 minutes, or a live
+clock check failed; a cycle that misses one league (`last_status: "partial"`
+on `/`) keeps the others fresh and does not set it. `/` also gives
+`league_age_seconds`. Filters do not hide reader problems. The documented kickoff correction is already applied
 in `kickoff_utc`; do not apply it again downstream.
 
 ## Picks

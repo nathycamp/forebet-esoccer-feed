@@ -237,8 +237,10 @@ def refresh_pages():
             cache["last_fetch"] = attempted_at
             if successful:
                 cache["fetched_at"] = completed_at
-            cache["last_status"] = "ok" if complete else "error"
-            cache["stale"] = not complete
+            # A partial read keeps the leagues it got; each league's own age (snapshot)
+            # decides freshness, so one missed league does not mark the whole feed stale.
+            cache["last_status"] = "ok" if complete else "partial" if successful else "error"
+            cache["stale"] = not successful
         logger.info("Reader cycle: %d/%d leagues read", len(successful), len(LEAGUES))
         if not successful:
             proxy_session_id = uuid.uuid4().hex[:12]
@@ -261,6 +263,8 @@ def health():
             "last_fetch": cache["last_fetch"],
             "last_status": cache["last_status"],
             "free_proxies_ready": len(load_free_proxy_pool()),
+            "league_age_seconds": {key: round((datetime.now(timezone.utc) - datetime.fromisoformat(page["fetched_at"].replace("Z", "+00:00"))).total_seconds())
+                                   for key, page in cache["leagues"].items() if page.get("fetched_at")},
             "telegram": dict(telegram_bot.STATUS),
         })
 

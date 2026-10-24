@@ -119,6 +119,14 @@ class ReaderServiceTests(unittest.TestCase):
         self.assertNotEqual(app.proxy_session_id, session)
         with app.cache_lock:
             self.assertEqual(app.latest_result(app.cache["leagues"]["volta6"]), "2026-10-23T10:14:00+00:00")
+            # The other three leagues read fine, so the feed is partial, not stale.
+            self.assertEqual(app.cache["last_status"], "partial")
+            self.assertFalse(app.cache["stale"])
+        with patch.object(app, "run_reader", return_value={key: {"status": "error"} for key in app.LEAGUES}), \
+                self.assertLogs(app.logger, level="WARNING"):
+            app.refresh_pages()
+        with app.cache_lock:
+            self.assertEqual(app.cache["last_status"], "error")
             self.assertTrue(app.cache["stale"])
 
     def test_hooks_run_right_after_each_read_even_if_one_fails(self):
@@ -135,7 +143,7 @@ class ReaderServiceTests(unittest.TestCase):
         with app.app.test_client() as client, patch.object(app, "load_free_proxy_pool", return_value=["http://1.2.3.4:80"] * 5):
             self.assertEqual(client.get("/").get_json(), {
                 "status": "ok", "last_fetch": None, "last_status": "error", "free_proxies_ready": 5,
-                "telegram": telegram_bot.STATUS
+                "league_age_seconds": {}, "telegram": telegram_bot.STATUS
             })
         with patch.object(app, "run_reader", return_value={
             key: {"fixtures": [{"home_tag": "Mani", "kickoff_utc": "2026-10-18T16:55:00+00:00"}], "status": "ok"}
