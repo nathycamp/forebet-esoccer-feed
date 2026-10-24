@@ -63,9 +63,13 @@ class ReaderServiceTests(unittest.TestCase):
             league_reads = [url for proxy, url in reads if proxy == "http://fast:2" and "/esoccer/" in url]
             self.assertEqual(len(league_reads), 1)
             self.assertIn("volta", league_reads[0])
-            self.assertIn("socks5://slow:1", reader.load_bench())
-            # Next cycle the benched seed goes behind the working proxy.
-            self.assertEqual([proxy["server"] for proxy in reader.proxy_candidates()][:2], ["http://fast:2", "socks5://slow:1"])
+            self.assertNotIn("socks5://slow:1", reader.load_bench())  # seeds are never benched
+        with patch.dict(os.environ, {"PROXY_SOURCE": "proxifly", "FREE_PROXY_SEEDS": ""}), \
+                patch.object(reader, "LAST_PROXY_FILE", f"{folder}/none"), \
+                patch.object(reader, "BENCH_FILE", f"{folder}/bench.json"), \
+                patch.object(reader, "load_free_proxy_pool", return_value=["http://a:1", "http://b:2", "http://c:3"]):
+            reader.bench_proxy("http://a:1")
+            self.assertEqual([proxy["server"] for proxy in reader.proxy_candidates()], ["http://b:2", "http://c:3", "http://a:1"])
 
     def test_league_urls_are_tagged_per_read(self):
         moment = datetime(2026, 10, 23, 12, 0, tzinfo=timezone.utc)

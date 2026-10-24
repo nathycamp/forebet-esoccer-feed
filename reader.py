@@ -441,8 +441,7 @@ def proxy_candidates():
             servers.append(handle.read().strip())
     except OSError:
         pass
-    # FREE_PROXY_SEEDS lists proxies known to clear Cloudflare; they survive redeploys.
-    servers += [seed.strip() for seed in os.environ.get("FREE_PROXY_SEEDS", "").split(",") if seed.strip()]
+    servers += seeds()
     servers += load_free_proxy_pool()
     if len(set(filter(None, servers))) < MAX_PROXY_ATTEMPTS:
         try:
@@ -455,6 +454,11 @@ def proxy_candidates():
     servers = [server for server in servers if server not in benched] + [server for server in servers if server in benched]
     for server in servers[:MAX_PROXY_ATTEMPTS]:
         yield {"server": server}
+
+
+def seeds():
+    """FREE_PROXY_SEEDS lists proxies known to clear Cloudflare; they survive redeploys."""
+    return [seed.strip() for seed in os.environ.get("FREE_PROXY_SEEDS", "").split(",") if seed.strip()]
 
 
 def load_bench(now=None):
@@ -619,10 +623,13 @@ def read_pages():
             missed = [key for key in LEAGUES if leagues.get(key, {}).get("status") != "ok"]
             elapsed = (datetime.now(timezone.utc) - started).total_seconds()
             if missed and "username" not in proxy:
-                bench_proxy(proxy["server"])
+                # Seeds are the proxies known to clear Cloudflare; benching them leaves
+                # only ones that fail the homepage, so a slow seed is retried past, not benched.
+                if proxy["server"] not in seeds():
+                    bench_proxy(proxy["server"])
                 if can_retry and number < MAX_PROXY_ATTEMPTS and elapsed < budget:
-                    logger.warning("%s missed %s; benched for %d min, retrying them through the next proxy",
-                                   proxy["server"], ",".join(missed), BENCH_MINUTES)
+                    logger.warning("%s missed %s; retrying them through the next proxy",
+                                   proxy["server"], ",".join(missed))
                     continue
             break
     if proxy and "username" not in proxy:
