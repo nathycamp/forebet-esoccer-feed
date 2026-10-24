@@ -333,7 +333,7 @@ BENCH_FILE = os.environ.get("PROXY_BENCH_FILE", "/tmp/forebet-proxy-bench.json")
 BENCH_MINUTES = int(os.environ.get("PROXY_BENCH_MINUTES", "20"))
 # Missed leagues are retried through the next proxy only while this much of the
 # app's reader timeout is left, so a retry never costs the leagues already read.
-RETRY_RESERVE_SECONDS = 60
+RETRY_RESERVE_SECONDS = 90
 MAX_PROXY_ATTEMPTS = 3
 MIN_FREE_PROXIES = 5
 
@@ -589,6 +589,12 @@ def read_pages():
                     except Exception:
                         if "username" not in proxy:
                             drop_free_proxy(proxy["server"])
+                        out_of_time = leagues and (datetime.now(timezone.utc) - started).total_seconds() >= budget
+                        if out_of_time:
+                            # Keep what earlier proxies read rather than risk the reader timeout.
+                            logger.warning("Homepage failed through %s; out of time, keeping the leagues read",
+                                           proxy["server"])
+                            break
                         if can_retry:
                             logger.warning("Homepage failed through %s; trying the next proxy",
                                            proxy["server"].rsplit("@", 1)[-1], exc_info=True)
