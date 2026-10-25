@@ -65,9 +65,11 @@ MAX_AVAILABLE_LINES = 8
 # (2026-10-23: 60%+ calls landed esb8 71%, volta6 74%, gt12 78% vs 52-56% league
 # rates); h2hgg's calls only matched its low-scoring league rate (+6), so it stays out.
 TRUSTED_GOAL_LEAGUES = {"esb8", "volta6", "gt12"}
-# Near-even calls and players new to the feed carry no real model opinion.
+# Near-even calls and players new to the feed carry no real model opinion. 3 games each is enough: on a
+# replay of the feed's own results (2026-10-25), calls at the play threshold hit 75% with 3-4 games of
+# history (8 calls) and 75% with 5+ (199), but 61% with 0-2 (18), so returning players get calls sooner.
 MIN_CALL_PROBABILITY = .55
-MIN_PLAYER_GAMES = 5
+MIN_PLAYER_GAMES = 3
 # Form changes between sessions, so only imminent games get picks.
 PICK_WINDOW_MINUTES = 20
 # Replays: over/under at the league line beat league rates in esb8 and volta6
