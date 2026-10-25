@@ -103,6 +103,17 @@ class ReaderServiceTests(unittest.TestCase):
         self.assertEqual(app.keep_progress([later], [live]), [later])
         self.assertEqual(app.keep_progress([reverted], [later]), [later])
 
+    def test_a_final_score_below_one_already_seen_is_ignored(self):
+        live = {"home_tag": "A", "away_tag": "B", "kickoff_utc": "2026-10-25T15:38:00+00:00",
+                "status": "live", "live_score": "4-1", "match_clock": "5"}
+        early_ft = dict(live, status="played", actual_score="1-0", live_score=None, match_clock="FT")
+        real_ft = dict(early_ft, actual_score="5-1")
+        with self.assertLogs(app.logger, level="WARNING"):
+            self.assertEqual(app.keep_progress([early_ft], [live]), [live])          # 1-0 after 4-1: wrong
+        self.assertEqual(app.keep_progress([real_ft], [live]), [real_ft])            # 5-1: fine
+        with self.assertLogs(app.logger, level="WARNING"):
+            self.assertEqual(app.keep_progress([early_ft], [real_ft]), [real_ft])    # never back to 1-0
+
     def test_older_forebet_page_does_not_replace_newer_data(self):
         def page(*kickoffs):
             return {"status": "ok", "fixtures": [{"home_tag": "A", "away_tag": "B", "status": "played",

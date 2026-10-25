@@ -190,9 +190,29 @@ def keep_progress(fixtures, previous):
         earlier = seen.get((row.get("home_tag"), row.get("away_tag"), row.get("kickoff_utc")))
         if earlier and PROGRESS.get(earlier.get("status"), 0) > PROGRESS.get(row.get("status"), 0):
             kept.append(earlier)
+        elif earlier and goals_went_down(earlier, row):
+            # Forebet sometimes shows "FT" with an early score (1-0 for a game that ended 5-1). Goals never go
+            # down, so that score is wrong: keep what we had (a wrong result would mislead the model).
+            logger.warning("Ignoring impossible %s score for %s v %s at %s: had %s", row.get("status"),
+                           row.get("home_tag"), row.get("away_tag"), row.get("kickoff_utc"), score_of(earlier))
+            kept.append(earlier)
         else:
             kept.append(row)
     return kept
+
+
+def score_of(row):
+    return row.get("actual_score") or row.get("live_score")
+
+
+def goals_went_down(earlier, row):
+    """True when a row shows fewer goals for either side than we had already seen for the same game."""
+    before, after = score_of(earlier), score_of(row)
+    try:
+        before, after = [int(x) for x in before.split("-")], [int(x) for x in after.split("-")]
+    except (AttributeError, ValueError):
+        return False
+    return after[0] < before[0] or after[1] < before[1]
 
 
 def merge_older_copy(fixtures, previous):
