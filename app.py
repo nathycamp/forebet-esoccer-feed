@@ -193,6 +193,17 @@ def keep_progress(fixtures, previous):
     return kept
 
 
+def merge_older_copy(fixtures, previous):
+    """Forebet also serves older copies of a page. Take its fixtures (it may list new upcoming games) but
+    never lose a result we already have: games it shows behind are kept as we had them (keep_progress), and
+    finished games it no longer lists are added back."""
+    merged = keep_progress(fixtures, previous)
+    listed = {(row.get("home_tag"), row.get("away_tag"), row.get("kickoff_utc")) for row in merged}
+    missing = [row for row in previous if row.get("status") in ("played", "live")
+               and (row.get("home_tag"), row.get("away_tag"), row.get("kickoff_utc")) not in listed]
+    return sorted(merged + missing, key=lambda row: row.get("kickoff_utc", ""))
+
+
 def latest_result(page):
     """Kickoff of the newest finished game on a league page ('' when none)."""
     return max((row.get("kickoff_utc", "") for row in (page or {}).get("fixtures", [])
@@ -208,14 +219,16 @@ def refresh_pages():
         successful = {key: page for key, page in results.items() if page.get("status") == "ok"}
         stale_pages = False
         with cache_lock:
-            # Forebet sometimes serves an older copy of a page; a read whose newest
-            # result predates the cached one is dropped so it cannot roll data back.
+            # Forebet sometimes serves an older copy of a page. Dropping it froze the league until it went
+            # stale (no picks for many minutes), so it is merged instead: its fixtures are used, our newer
+            # results are kept, and nothing rolls back.
             for key in list(successful):
                 previous = cache["leagues"].get(key)
                 if previous and latest_result(successful[key]) < latest_result(previous):
-                    logger.warning("Ignoring stale Forebet %s page: newest result %s is older than %s",
-                                   key, latest_result(successful[key]), latest_result(previous))
-                    del successful[key]
+                    logger.warning("Older Forebet %s page (newest result %s, ours %s): merged, keeping our newer "
+                                   "results", key, latest_result(successful[key]), latest_result(previous))
+                    successful[key] = dict(successful[key], fixtures=merge_older_copy(successful[key]["fixtures"],
+                                                                                    previous["fixtures"]))
                     stale_pages = True
         if stale_pages:
             # Old copies seem tied to the route, so the next read goes another way.

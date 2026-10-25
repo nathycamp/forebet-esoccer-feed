@@ -111,6 +111,8 @@ class ReaderServiceTests(unittest.TestCase):
         with patch.object(app, "run_reader", return_value=newer):
             app.refresh_pages()
         older = dict(newer, volta6=page("2026-10-23T09:29:00+00:00"))
+        upcoming = {"home_tag": "C", "away_tag": "D", "status": "upcoming", "kickoff_utc": "2026-10-23T10:40:00+00:00"}
+        older["volta6"] = dict(older["volta6"], fixtures=older["volta6"]["fixtures"] + [upcoming])
         session = app.proxy_session_id
         with patch.object(app, "run_reader", return_value=older), patch.object(app, "demote_last_proxy") as demote, \
                 self.assertLogs(app.logger, level="WARNING"):
@@ -118,9 +120,12 @@ class ReaderServiceTests(unittest.TestCase):
         demote.assert_called_once()
         self.assertNotEqual(app.proxy_session_id, session)
         with app.cache_lock:
+            volta = app.cache["leagues"]["volta6"]["fixtures"]
+            # Our newer result is kept, the older copy's games and its new upcoming game are taken.
             self.assertEqual(app.latest_result(app.cache["leagues"]["volta6"]), "2026-10-23T10:14:00+00:00")
-            # The other three leagues read fine, so the feed is partial, not stale.
-            self.assertEqual(app.cache["last_status"], "partial")
+            self.assertEqual([row["kickoff_utc"][11:16] for row in volta], ["09:29", "10:14", "10:40"])
+            # Every league was read (the older copy was merged), so the feed is complete and fresh.
+            self.assertEqual(app.cache["last_status"], "ok")
             self.assertFalse(app.cache["stale"])
         with patch.object(app, "run_reader", return_value={key: {"status": "error"} for key in app.LEAGUES}), \
                 self.assertLogs(app.logger, level="WARNING"):
