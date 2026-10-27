@@ -232,6 +232,18 @@ def latest_result(page):
                 if row.get("status") == "played"), default="")
 
 
+FROZEN_LIVE_MINUTES = 30      # every league's game is over well inside this
+
+
+def frozen_page(page, now=None):
+    """Kickoff of a game the page still shows live although it began more than FROZEN_LIVE_MINUTES ago, or ''.
+    27 Oct: one free proxy served the same old copy for 2 hours (games of 16:35 still live, no new results); its
+    newest result equalled ours, so the older-copy check never fired and the proxy was never switched."""
+    now = now or datetime.now(timezone.utc)
+    return min((row["kickoff_utc"] for row in (page or {}).get("fixtures", []) if row.get("status") == "live"
+                and now - parse_time(row["kickoff_utc"]) > timedelta(minutes=FROZEN_LIVE_MINUTES)), default="")
+
+
 def refresh_pages():
     global proxy_session_id
     attempted_at = now_utc()
@@ -251,6 +263,10 @@ def refresh_pages():
                                    "results", key, latest_result(successful[key]), latest_result(previous))
                     successful[key] = dict(successful[key], fixtures=merge_older_copy(successful[key]["fixtures"],
                                                                                     previous["fixtures"]))
+                    stale_pages = True
+                elif frozen_page(successful[key]):
+                    logger.warning("Frozen Forebet %s page (game of %s still live): switching proxy", key,
+                                   frozen_page(successful[key]))
                     stale_pages = True
         if stale_pages:
             # Old copies seem tied to the route, so the next read goes another way.

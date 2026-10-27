@@ -145,6 +145,21 @@ class ReaderServiceTests(unittest.TestCase):
             self.assertEqual(app.cache["last_status"], "error")
             self.assertTrue(app.cache["stale"])
 
+    def test_frozen_forebet_page_switches_proxy(self):
+        now = datetime.now(timezone.utc)
+        def page(minutes_ago):
+            kickoff = (now - timedelta(minutes=minutes_ago)).isoformat()
+            return {"status": "ok", "fixtures": [{"home_tag": "A", "away_tag": "B", "status": "live",
+                                                  "live_score": "1-0", "kickoff_utc": kickoff}]}
+        self.assertEqual(app.frozen_page(page(10)), "")
+        self.assertTrue(app.frozen_page(page(90)))
+        session = app.proxy_session_id
+        with patch.object(app, "run_reader", return_value={key: page(90) for key in app.LEAGUES}), \
+                patch.object(app, "demote_last_proxy") as demote, self.assertLogs(app.logger, level="WARNING"):
+            app.refresh_pages()
+        demote.assert_called_once()
+        self.assertNotEqual(app.proxy_session_id, session)
+
     def test_hooks_run_right_after_each_read_even_if_one_fails(self):
         calls = []
         def broken():
