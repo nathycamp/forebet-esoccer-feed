@@ -86,9 +86,11 @@ class ReaderServiceTests(unittest.TestCase):
             handle.write("http://a:1")
         with open(pool, "w") as handle:
             json.dump(["http://a:1", "http://b:2", "http://c:3"], handle)
-        with patch.object(reader, "LAST_PROXY_FILE", last), patch.object(reader, "FREE_PROXY_POOL_FILE", pool):
+        with patch.object(reader, "LAST_PROXY_FILE", last), patch.object(reader, "FREE_PROXY_POOL_FILE", pool), \
+                patch.object(reader, "BENCH_FILE", f"{folder}/bench.json"):
             self.assertEqual(reader.demote_last_proxy(), "http://a:1")
             self.assertEqual(reader.load_free_proxy_pool(), ["http://b:2", "http://c:3", "http://a:1"])
+            self.assertIn("http://a:1", reader.load_bench())          # a seed is tried first: bench it too
             self.assertIsNone(reader.demote_last_proxy())
             reader.drop_free_proxy("http://b:2")
             self.assertEqual(reader.load_free_proxy_pool(), ["http://c:3", "http://a:1"])
