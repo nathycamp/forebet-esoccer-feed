@@ -540,6 +540,7 @@ def read_esoccerbet(page):
         try:
             visit(page, esoccerbet.BASE + path)
             pages[path] = page.content()
+            logger.info("esoccerbet %s: %r, %d characters", path, page.title()[:60], len(pages[path]))
         except Exception as exc:
             failed.append(f"{path}: {type(exc).__name__}")
     if failed:
