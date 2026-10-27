@@ -17,6 +17,7 @@ from pathlib import Path
 from apscheduler.schedulers.background import BackgroundScheduler
 from flask import Flask, Response, jsonify, request
 
+import esoccerbet
 import telegram_bot
 from prediction_engine import MODEL_VERSION, predict_feed
 from prediction_engine.model import tag
@@ -36,6 +37,7 @@ cache = {
     "leagues": {},
 }
 MAX_CACHE_AGE_SECONDS = 6 * 60
+ESOCCERBET_INTERVAL_SECONDS = 60
 READER_TIMEOUT_SECONDS = int(os.environ.get("READER_TIMEOUT_SECONDS", "100"))
 # Picks flip from "wait" to "play" only 2-4 minutes before kickoff, so read every minute.
 READER_INTERVAL_SECONDS = int(os.environ.get("READER_INTERVAL_SECONDS", "60"))
@@ -315,42 +317,112 @@ def health():
             "last_fetch": cache["last_fetch"],
             "last_status": cache["last_status"],
             "free_proxies_ready": len(load_free_proxy_pool()),
+            "esoccerbet": dict(esoccerbet.STATUS),
             "league_age_seconds": {key: round((datetime.now(timezone.utc) - datetime.fromisoformat(page["fetched_at"].replace("Z", "+00:00"))).total_seconds())
                                    for key, page in cache["leagues"].items() if page.get("fetched_at")},
             "telegram": dict(telegram_bot.STATUS),
         })
 
 
+BACKUP_MATCH_MINUTES = 6       # an esoccerbet game is a Forebet game with the same players kicking off this close
+
+
+def backup_league(minutes, home, away, known):
+    """Our league for an esoccerbet game: by match length, and for 8 minutes (esb8 or h2hgg) by its players."""
+    if minutes in esoccerbet.MINUTES_LEAGUE:
+        return esoccerbet.MINUTES_LEAGUE[minutes]
+    if minutes == "8":
+        leagues = {known[name][0] for name in (home.casefold(), away.casefold()) if name in known} & {"esb8", "h2hgg"}
+        return leagues.pop() if len(leagues) == 1 else None
+    return None
+
+
+def merge_backup(leagues, games, now):
+    """Forebet's rows with esoccerbet's games merged in (copies; the cache is not changed): a result fills the
+    same Forebet game still shown unfinished, and a game Forebet does not list is added with source
+    "esoccerbet". Names take the case Forebet (and SportyBet) use when we know the player."""
+    known = {}
+    for key, rows in leagues.items():
+        for row in rows if isinstance(rows, list) else []:
+            for side in ("home_tag", "away_tag"):
+                known.setdefault(str(row.get(side, "")).casefold(), (key, row.get(side)))
+    added = {}
+    for game in games:
+        league = backup_league(game["minutes"], game["home"], game["away"], known)
+        if league in leagues:
+            added.setdefault(league, []).append(game)
+    merged = {}
+    for key, rows in leagues.items():
+        rows = [dict(row) for row in rows] if isinstance(rows, list) else []
+        if key not in added:
+            merged[key] = rows if rows or isinstance(leagues[key], list) else leagues[key]
+            continue
+        index = {}
+        for row in rows:
+            index.setdefault((tag(row.get("home_tag", "")), tag(row.get("away_tag", ""))), []).append(row)
+        for game in sorted(added[key], key=lambda game: game["kickoff"]):
+            same = [row for row in index.get((tag(game["home"]), tag(game["away"])), [])
+                    if abs(parse_time(row["kickoff_utc"]) - game["kickoff"]) <= timedelta(minutes=BACKUP_MATCH_MINUTES)]
+            if same:
+                row = same[0]
+                if game["score"] and row.get("status") != "played":
+                    row.update(status="played", actual_score=game["score"], live_score=None, match_clock=None,
+                               result_source="esoccerbet")
+                continue
+            status = "played" if game["score"] else "upcoming" if game["kickoff"] > now else "live"
+            row = {"home_tag": known.get(game["home"].casefold(), (key, game["home"]))[1],
+                   "away_tag": known.get(game["away"].casefold(), (key, game["away"]))[1],
+                   "home_club": game["home_club"], "away_club": game["away_club"],
+                   "kickoff_utc": game["kickoff"].isoformat(), "p1": 33.3, "px": 33.3, "p2": 33.4, "pred": "X",
+                   "correct_score": None, "avg_goals": None, "status": status, "actual_score": game["score"],
+                   "live_score": None, "match_clock": None, "source": "esoccerbet"}
+            rows.append(row)
+            index.setdefault((tag(row["home_tag"]), tag(row["away_tag"])), []).append(row)
+        merged[key] = sorted(rows, key=lambda row: row["kickoff_utc"])
+    return merged
+
+
 def snapshot(selected, now):
-    """Copy the cached feed for the selected leagues with freshness metadata."""
+    """Copy the cached feed for the selected leagues with freshness metadata (esoccerbet's games merged in)."""
     with cache_lock:
         leagues = {}
         league_fetched_at = {}
         league_changed_at = {}
         league_clock_checks = {}
-        too_old = False
+        clock_mismatch = False
         for key in LEAGUES:
             if key not in selected:
                 continue
             saved = cache["leagues"].get(key)
             leagues[key] = saved["fixtures"] if saved else {"status": "error"}
-            fetched_at = saved.get("fetched_at") if saved else None
-            league_fetched_at[key] = fetched_at
+            league_fetched_at[key] = saved.get("fetched_at") if saved else None
             league_changed_at[key] = saved.get("changed_at") if saved else None
             league_clock_checks[key] = saved.get("clock_check") if saved else None
             if league_clock_checks[key] and league_clock_checks[key].get("status") == "mismatch":
-                too_old = True
-            if not fetched_at or (now - datetime.fromisoformat(fetched_at.replace("Z", "+00:00"))).total_seconds() > MAX_CACHE_AGE_SECONDS:
-                too_old = True
-        return {
-            "fetched_at": cache["fetched_at"],
-            "source": "railway-shifter-reader",
-            "stale": cache["stale"] or too_old,
-            "league_fetched_at": league_fetched_at,
-            "league_changed_at": league_changed_at,
-            "league_clock_checks": league_clock_checks,
-            "leagues": leagues,
-        }
+                clock_mismatch = True
+        forebet_stale = cache["stale"]
+        fetched_at = cache["fetched_at"]
+    backup_at = esoccerbet.STATUS["fetched_at"]
+    leagues = merge_backup(leagues, esoccerbet.rows(), now)
+    for key, rows in leagues.items():
+        # A league esoccerbet keeps current counts as fresh while Forebet is stuck or down.
+        from_backup = isinstance(rows, list) and any(
+            row.get("source") == "esoccerbet" or row.get("result_source") == "esoccerbet" for row in rows)
+        if backup_at and from_backup and (not league_fetched_at[key]
+                                          or parse_time(league_fetched_at[key]) < parse_time(backup_at)):
+            league_fetched_at[key] = backup_at
+    too_old = any(not value or (now - parse_time(value)).total_seconds() > MAX_CACHE_AGE_SECONDS
+                  for value in league_fetched_at.values())
+    backup_fresh = bool(backup_at) and (now - parse_time(backup_at)).total_seconds() <= MAX_CACHE_AGE_SECONDS
+    return {
+        "fetched_at": fetched_at,
+        "source": "railway-shifter-reader",
+        "stale": (forebet_stale and not backup_fresh) or too_old or clock_mismatch,
+        "league_fetched_at": league_fetched_at,
+        "league_changed_at": league_changed_at,
+        "league_clock_checks": league_clock_checks,
+        "leagues": leagues,
+    }
 
 
 @app.get("/predictions")
@@ -554,6 +626,8 @@ def build_picks(feed, now):
         over_rates[key] = {str(goal_line): round(sum(total > goal_line for total in totals) / len(totals), 4)
                            for goal_line in GOAL_LINES} if totals else {}
         rates = outcome_rates(rows)
+        sources = {(tag(row["home_tag"]), tag(row["away_tag"]), row["kickoff_utc"]): row.get("source", "forebet")
+                   for row in rows}
         picks = []
         for forecast in forecasts["leagues"][key]:
             # Replays favoured form probabilities pulled halfway to league rates over Forebet's.
@@ -573,7 +647,9 @@ def build_picks(feed, now):
                                            "X2": round(winner["X"] + winner["2"], 4),
                                            "12": round(winner["1"] + winner["2"], 4)},
                          "winner_markets_trust": "not trusted: did not beat league rates in replays",
-                         "safest_option": None, "goal_lines": None, "playable_options": []})
+                         "safest_option": None, "goal_lines": None, "playable_options": [],
+                         "source": sources.get((tag(forecast["home_tag"]), tag(forecast["away_tag"]),
+                                               forecast["kickoff_utc"]), "forebet")})
             pick["previous_game"] = previous_game(rows, pick, LEAGUE_MINUTES[key])
             if key in delays:
                 pick["kickoff_adjusted_minutes"] = delays[key]
@@ -617,7 +693,7 @@ def board_row(row, league, lines):
     option = row.get("best_available") if lines else row.get("safest_option")
     entry = {"league": league, "kickoff_utc": row["kickoff_utc"], "home_tag": row["home_tag"],
              "away_tag": row["away_tag"], "advice": row["advice"], "selection": None, "probability": None,
-             "fair_odds": None, "edge": None}
+             "fair_odds": None, "edge": None, "source": row.get("source", "forebet")}
     if option:
         entry.update(selection=option["selection"], probability=option["probability"],
                      fair_odds=option.get("fair_odds"), edge=round(pick_edge(option), 4))
@@ -930,6 +1006,16 @@ def start_scheduler():
         max_instances=1,
         coalesce=True,
         id="forebet-reader",
+    )
+    # The backup source: plain requests, every minute, whatever Forebet is doing.
+    scheduler.add_job(
+        esoccerbet.refresh,
+        "interval",
+        seconds=ESOCCERBET_INTERVAL_SECONDS,
+        next_run_time=datetime.now(timezone.utc),
+        max_instances=1,
+        coalesce=True,
+        id="esoccerbet-reader",
     )
     # The proxifly list updates every 5 minutes; keep tested backups ready for when Shifter fails.
     if os.environ.get("PROXY_SOURCE", "auto") != "shifter":
