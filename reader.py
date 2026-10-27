@@ -636,7 +636,7 @@ def read_pages():
                     except Exception as exc:
                         leagues[key] = {"status": "error", "error": str(exc)}
                         logger.exception("Failed to read %s", key)
-                if os.environ.get("ESOCCERBET_IN_BROWSER", "1") == "1" and "_esoccerbet" not in leagues:
+                if os.environ.get("ESOCCERBET_IN_BROWSER", "0") == "1" and "_esoccerbet" not in leagues:
                     leagues["_esoccerbet"] = read_esoccerbet(page)
             finally:
                 if meter:

@@ -434,7 +434,8 @@ class ReaderServiceTests(unittest.TestCase):
 
     def test_skip_homepage_goes_straight_to_league_pages(self):
         environment = {"SHIFTER_USER": "u", "SHIFTER_HOST": "h", "SHIFTER_PORT": "1", "SHIFTER_PASS": "p",
-                       "SKIP_HOMEPAGE": "1", "BROWSER_PROFILE_DIR": "/tmp/forebet-test-profile"}
+                       "SKIP_HOMEPAGE": "1", "BROWSER_PROFILE_DIR": "/tmp/forebet-test-profile",
+                       "ESOCCERBET_IN_BROWSER": "1"}
         playwright = MagicMock()
         with patch.dict(reader.os.environ, environment), \
                 patch.object(reader, "sync_playwright") as launcher, \

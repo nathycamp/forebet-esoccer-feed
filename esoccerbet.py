@@ -9,6 +9,10 @@ Forebet does not list is added, marked source "esoccerbet" so the bots can treat
 esoccerbet names its leagues by match length: 6 minutes is our volta6, 12 minutes gt12, and 8 minutes holds
 both esb8 and h2hgg (told apart by the players we know from Forebet's rows); 10 minutes (Live Arena) is not ours.
 Names come in lower case; the merge puts back the case Forebet and SportyBet use.
+
+27 Oct: esoccerbet's Cloudflare refuses Railway (403) and blocks the free proxies too ("Attention Required"), so
+the bots read it from the devices (forebet-live/backup.py). Railway retries direct requests every 30 minutes and
+reads it through its browser only with ESOCCERBET_IN_BROWSER=1.
 """
 import html
 import logging
