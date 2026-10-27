@@ -122,7 +122,7 @@ def refresh(now=None):
             page = fetch(path)
             games += schedule(page, now) if path == "/schedule/" else results(page, path, now)
         except Exception as exc:
-            failed.append(f"{path}: {type(exc).__name__}")
+            failed.append(f"{path}: {type(exc).__name__} {getattr(exc, 'code', '')}".strip())
     remember(games, now)
     with LOCK:
         if len(failed) < len(PAGES):
