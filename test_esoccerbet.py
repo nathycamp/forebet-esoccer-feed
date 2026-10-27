@@ -57,6 +57,9 @@ class EsoccerbetTest(unittest.TestCase):
                                  "score": "3-2"}])
         league = esoccerbet.results(LEAGUE, "/fifa-8-minutes/", NOW)
         self.assertEqual((league[0]["home"], league[0]["score"], league[0]["kickoff"].hour), ("threat", "2-3", 20))
+        # A browser's copy of a page writes the same attributes with double quotes.
+        self.assertEqual(esoccerbet.results(HOME.replace("'", '"'), "/", NOW), home)
+        self.assertEqual(len(esoccerbet.schedule(SCHEDULE.replace("'", '"'), NOW)), 2)
         games = esoccerbet.schedule(SCHEDULE, NOW)
         self.assertEqual([(g["home"], g["kickoff"].isoformat()) for g in games],
                          [("mani", "2026-10-27T20:53:00+00:00"),

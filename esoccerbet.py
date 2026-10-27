@@ -31,9 +31,10 @@ ROWS = {}            # (minutes, home, away, kickoff) -> row, every game seen in
 STATUS = {"fetched_at": None, "last_error": None, "rows": 0}
 LOCK = threading.Lock()
 
-CARD = re.compile(r"<div class='matchCard'>(.*?)<span class='tmName'>[^<]*</span>\s*</div>\s*</div>", re.S)
-PLAYER = re.compile(r"<a href='(?:/fifa-(\d+)-minutes/)?([^/']+)/'>[^<]*</a>\s*<span class='tmName'>([^<]*)</span>")
-SCHEDULE_ROW = re.compile(r"<tr class='linhasTR'><td>(\d{1,2}:\d{2})<br><span[^>]*>(\d{1,2})/(\d{1,2})</span></td>(.*?)</tr>",
+Q = "[\'\"]"           # quotes: the raw page uses ', a browser's copy of it "
+CARD = re.compile(rf"<div class={Q}matchCard{Q}>(.*?)<span class={Q}tmName{Q}>[^<]*</span>\s*</div>\s*</div>", re.S)
+PLAYER = re.compile(rf"<a href={Q}(?:/fifa-(\d+)-minutes/)?([^/'\"]+)/{Q}>[^<]*</a>\s*<span class={Q}tmName{Q}>([^<]*)</span>")
+SCHEDULE_ROW = re.compile(rf"<tr class={Q}linhasTR{Q}><td>(\d{{1,2}}:\d{{2}})<br><span[^>]*>(\d{{1,2}})/(\d{{1,2}})</span></td>(.*?)</tr>",
                           re.S)
 PAGE_MINUTES = re.compile(r"/fifa-(\d+)-minutes/$")
 
@@ -63,14 +64,14 @@ def results(page, path, now):
     """Finished games on a results page: [{minutes, home, away, home_club, away_club, kickoff, score}]."""
     page_minutes = (PAGE_MINUTES.search(path) or [None, None])[1]
     out = []
-    for card in CARD.finditer(page + "<span class='tmName'></span></div></div>"):
+    for card in CARD.finditer(page):
         text = card.group(0)
         players = PLAYER.findall(text)
-        nums = re.search(r"<span class='nums'>(.*?)</span>\s*(?:<!--.*?-->\s*)?<span class='matchDate'>([^<]+)</span>",
+        nums = re.search(rf"<span class={Q}nums{Q}>(.*?)</span>\s*(?:<!--.*?-->\s*)?<span class={Q}matchDate{Q}>([^<]+)</span>",
                          text, re.S)
         if len(players) != 2 or not nums:
             continue
-        goals = re.sub(r"<span class='ht'>\(\d+\)</span>", "", nums.group(1))
+        goals = re.sub(rf"<span class={Q}ht{Q}>\(\d+\)</span>", "", nums.group(1))
         goals = re.fullmatch(r"\s*(\d+)\s*-\s*(\d+)\s*", re.sub(r"<[^>]+>", "", goals))
         when = re.fullmatch(r"\s*(\d{1,2})/(\d{1,2}) (\d{1,2}:\d{2})\s*", nums.group(2))
         minutes = players[0][0] or page_minutes
@@ -91,7 +92,7 @@ def schedule(page, now):
     """Upcoming games on the schedule page."""
     out = []
     for clock, month, day, cells in SCHEDULE_ROW.findall(page):
-        players = re.findall(r"<a href='/fifa-(\d+)-minutes/([^/']+)/'>[^<]*</a><span class='teamName'>([^<]*)</span>",
+        players = re.findall(rf"<a href={Q}/fifa-(\d+)-minutes/([^/'\"]+)/{Q}>[^<]*</a><span class={Q}teamName{Q}>([^<]*)</span>",
                              cells)
         if len(players) != 2:
             continue
