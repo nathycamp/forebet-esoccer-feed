@@ -443,7 +443,9 @@ class ReaderServiceTests(unittest.TestCase):
             launcher.return_value.__enter__.return_value = playwright
             reader.read_pages()
         urls = [call.args[1].split("?t=")[0] for call in visit.call_args_list]
-        self.assertEqual(urls, list(reader.LEAGUES.values()))
+        # Forebet's league pages, then the backup source's pages through the same browser.
+        self.assertEqual(urls, list(reader.LEAGUES.values()) + [reader.esoccerbet.BASE + path
+                                                                 for path in reader.esoccerbet.PAGES])
 
     def test_hung_reader_is_killed(self):
         process = MagicMock()

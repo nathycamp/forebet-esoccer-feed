@@ -102,6 +102,20 @@ class EsoccerbetTest(unittest.TestCase):
                 app.cache.update(saved)
             esoccerbet.ROWS.clear()
 
+    def test_pages_read_by_the_reader_browser_are_taken(self):
+        esoccerbet.ROWS.clear()
+        pages = {key: {"status": "ok", "fixtures": []} for key in app.LEAGUES}
+        pages["_esoccerbet"] = {"status": "ok", "pages": {"/schedule/": SCHEDULE}, "failed": []}
+        try:
+            with patch.object(app, "run_reader", return_value=pages):
+                app.refresh_pages()
+            self.assertEqual(esoccerbet.STATUS["read_by"], "browser")
+            self.assertEqual(len(esoccerbet.rows()), 2)
+            with app.cache_lock:
+                self.assertNotIn("_esoccerbet", app.cache["leagues"])
+        finally:
+            esoccerbet.ROWS.clear()
+
 
 if __name__ == "__main__":
     unittest.main()

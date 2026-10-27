@@ -17,6 +17,8 @@ from urllib.parse import urlsplit
 
 from patchright.sync_api import sync_playwright
 
+import esoccerbet
+
 
 logger = logging.getLogger(__name__)
 LEAGUES = {
@@ -531,6 +533,20 @@ def remember_proxy(server):
         logger.exception("Could not update the last working proxy")
 
 
+def read_esoccerbet(page):
+    """The backup source's pages through this browser and proxy (its Cloudflare refuses Railway's own address)."""
+    pages, failed = {}, []
+    for path in esoccerbet.PAGES:
+        try:
+            visit(page, esoccerbet.BASE + path)
+            pages[path] = page.content()
+        except Exception as exc:
+            failed.append(f"{path}: {type(exc).__name__}")
+    if failed:
+        logger.warning("esoccerbet pages failed in the browser: %s", "; ".join(failed))
+    return {"status": "ok" if pages else "error", "pages": pages, "failed": failed}
+
+
 def read_pages():
     """Return each league's parsed fixtures, or an error status."""
     retry = os.environ.get("PROXY_SOURCE", "auto") != "shifter"
@@ -619,6 +635,8 @@ def read_pages():
                     except Exception as exc:
                         leagues[key] = {"status": "error", "error": str(exc)}
                         logger.exception("Failed to read %s", key)
+                if os.environ.get("ESOCCERBET_IN_BROWSER", "1") == "1" and "_esoccerbet" not in leagues:
+                    leagues["_esoccerbet"] = read_esoccerbet(page)
             finally:
                 if meter:
                     try:

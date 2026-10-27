@@ -24,6 +24,7 @@ PAGES = ("/schedule/", "/", "/fifa-6-minutes/", "/fifa-8-minutes/", "/fifa-12-mi
 MINUTES_LEAGUE = {"6": "volta6", "12": "gt12"}       # 8 minutes: esb8 or h2hgg by player
 KEEP_DAYS = 3
 BRAZIL_OFFSET_HOURS = 3
+DIRECT_RETRY_MINUTES = 30
 USER_AGENT = "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_0) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0 Safari/537.36"
 
 ROWS = {}            # (minutes, home, away, kickoff) -> row, every game seen in the last KEEP_DAYS
@@ -113,25 +114,46 @@ def remember(games, now):
         STATUS["rows"] = len(ROWS)
 
 
-def refresh(now=None):
-    """Read every page once; a page that fails is skipped and logged."""
+def ingest(pages, now=None, how="direct", failed=()):
+    """Take the pages read ({path: html}), by plain request or (from Railway, which esoccerbet's Cloudflare
+    refuses with 403) through the reader's browser and proxy."""
     now = now or datetime.now(timezone.utc)
-    games, failed = [], []
-    for path in PAGES:
-        try:
-            page = fetch(path)
-            games += schedule(page, now) if path == "/schedule/" else results(page, path, now)
-        except Exception as exc:
-            failed.append(f"{path}: {type(exc).__name__} {getattr(exc, 'code', '')}".strip())
+    games = []
+    for path, page in pages.items():
+        games += schedule(page, now) if path == "/schedule/" else results(page, path, now)
     remember(games, now)
     with LOCK:
-        if len(failed) < len(PAGES):
+        if pages:
             STATUS["fetched_at"] = now.isoformat()
+            STATUS["read_by"] = how
         STATUS["last_error"] = "; ".join(failed) or None
     if failed:
-        logger.warning("esoccerbet: %d/%d pages failed (%s)", len(failed), len(PAGES), "; ".join(failed))
-    logger.info("esoccerbet: %d games read, %d kept", len(games), STATUS["rows"])
+        logger.warning("esoccerbet (%s): %d/%d pages failed (%s)", how, len(failed), len(PAGES), "; ".join(failed))
+    logger.info("esoccerbet (%s): %d games read, %d kept", how, len(games), STATUS["rows"])
     return games
+
+
+def refresh(now=None):
+    """Read every page once by plain request; a page that fails is skipped and logged. Once direct requests
+    are refused, they are only retried every DIRECT_RETRY_MINUTES (the browser read carries on meanwhile)."""
+    now = now or datetime.now(timezone.utc)
+    if STATUS.get("direct_refused_at") and now - datetime.fromisoformat(STATUS["direct_refused_at"]) < timedelta(
+            minutes=DIRECT_RETRY_MINUTES):
+        return []
+    pages, failed = {}, []
+    for path in PAGES:
+        try:
+            pages[path] = fetch(path)
+        except Exception as exc:
+            failed.append(f"{path}: {type(exc).__name__} {getattr(exc, 'code', '')}".strip())
+            if getattr(exc, "code", None) == 403:
+                STATUS["direct_refused_at"] = now.isoformat()
+                break
+    if pages:
+        STATUS.pop("direct_refused_at", None)
+    elif STATUS.get("read_by") == "browser":
+        failed = []            # the browser read is working: no need to report the refused direct one
+    return ingest(pages, now, "direct", failed)
 
 
 def rows():

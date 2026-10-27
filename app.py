@@ -252,6 +252,9 @@ def refresh_pages():
     attempted_at = now_utc()
     try:
         results = run_reader()
+        backup = results.pop("_esoccerbet", None)
+        if backup:
+            esoccerbet.ingest(backup.get("pages") or {}, how="browser", failed=backup.get("failed") or ())
         completed_at = now_utc()
         successful = {key: page for key, page in results.items() if page.get("status") == "ok"}
         stale_pages = False
