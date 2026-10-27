@@ -153,6 +153,9 @@ class ReaderServiceTests(unittest.TestCase):
                                                   "live_score": "1-0", "kickoff_utc": kickoff}]}
         self.assertEqual(app.frozen_page(page(10)), "")
         self.assertTrue(app.frozen_page(page(90)))
+        old_upcoming = page(90)
+        old_upcoming["fixtures"][0].update(status="upcoming", live_score=None)
+        self.assertTrue(app.frozen_page(old_upcoming))
         session = app.proxy_session_id
         with patch.object(app, "run_reader", return_value={key: page(90) for key in app.LEAGUES}), \
                 patch.object(app, "demote_last_proxy") as demote, self.assertLogs(app.logger, level="WARNING"):
