@@ -516,9 +516,6 @@ def demote_last_proxy():
         with open(temporary, "w") as handle:
             json.dump(pool, handle)
         os.replace(temporary, FREE_PROXY_POOL_FILE)
-    # A FREE_PROXY_SEEDS proxy is tried before the pool, so moving it back in the pool is not enough (27 Oct: the
-    # seed served a frozen copy for 2 hours and came first every cycle). Benched, it goes last for a while.
-    bench_proxy(server)
     logger.info("Switching away from free proxy %s after an old Forebet page", server)
     return server
 
