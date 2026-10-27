@@ -119,6 +119,52 @@ class EsoccerbetTest(unittest.TestCase):
         finally:
             esoccerbet.ROWS.clear()
 
+    def test_official_games_carry_their_league_and_source(self):
+        leagues = {"gt12": [forebet_row("Voodoo", "Walnut", "2026-10-27T16:30:00+00:00")], "esb8": []}
+        games = [{"league": "gt12", "home": "Voodoo", "away": "Walnut", "home_club": "", "away_club": "",
+                  "kickoff": datetime(2026, 10, 27, 16, 30, tzinfo=timezone.utc), "score": "4-3", "status": "played",
+                  "source": "gtleagues"},
+                 {"league": "esb8", "home": "Mani", "away": "Krkula", "home_club": "", "away_club": "",
+                  "kickoff": datetime(2026, 10, 27, 21, 0, tzinfo=timezone.utc), "score": None, "status": "upcoming",
+                  "source": "esportsbattle"}]
+        merged = app.merge_backup(leagues, games, NOW)
+        self.assertEqual((merged["gt12"][0]["actual_score"], merged["gt12"][0]["result_source"]), ("4-3", "gtleagues"))
+        self.assertEqual((merged["esb8"][0]["home_tag"], merged["esb8"][0]["source"]), ("Mani", "esportsbattle"))
+
+    def test_official_feeds_are_read(self):
+        import official
+        esb = {"/tournaments?": {"totalPages": 1, "tournaments": [
+                   {"id": 1, "token_international": "Champions League A 2026-10-27"},
+                   {"id": 2, "token_international": "Volta World Cup B 2026-10-27"},
+                   {"id": 3, "token_international": "International A 2x6 2026-10-27"}]},
+               "/tournaments/1/": [{"date": "2026-10-27T16:35:00Z", "status_id": 3,
+                                    "participant1": {"nickname": "Mani", "score": 7, "team": {"token_international": "x"}},
+                                    "participant2": {"nickname": "Krkula", "score": 1, "team": {}}}],
+               "/tournaments/2/": [{"date": "2026-10-27T23:00:00Z", "status_id": 1,
+                                    "participant1": {"nickname": "Groma"}, "participant2": {"nickname": "Senya"}}]}
+        h2h = [{"startDate": "2026-10-27T17:16:00Z", "isCancelled": False, "tournamentName": "Esoccer H2H GG League",
+                "participantAName": "TUSK", "participantBName": "CLINICAL", "matchStatus": "MATCH_ENDED",
+                "teamAScore": 0, "teamBScore": 1}]
+        gt = [{"kickoff": "2026-10-27T17:15:00.000Z", "status": 3, "result": {"stats": {"home_score": 3, "away_score": 1}},
+               "participants": [{"side": "home", "participant": {"player": {"nickname": "Vendetta"}, "team": {"name": "a"}}},
+                                {"side": "away", "participant": {"player": {"nickname": "King"}, "team": {"name": "b"}}}]}]
+
+        def fake(url, headers=None, timeout=25, proxy=None):
+            if url.startswith(official.ESB):
+                return next(value for key, value in esb.items() if key in url)
+            if url.startswith(official.GT):
+                self.assertEqual(headers["Origin"], "https://www.gtleagues.com")
+                return gt
+            return h2h
+        start, end = datetime(2026, 10, 27, 16, tzinfo=timezone.utc), datetime(2026, 10, 28, tzinfo=timezone.utc)
+        with patch.object(official, "get", side_effect=fake):
+            battle = official.esportsbattle(start, end)
+            self.assertEqual([(g["league"], g["home"], g["score"], g["status"]) for g in battle],
+                             [("esb8", "Mani", "7-1", "played"), ("volta6", "Groma", None, "upcoming")])   # no 2x6
+            self.assertEqual([(g["home"], g["score"]) for g in official.h2h(start)], [("TUSK", "0-1")])
+            self.assertEqual([(g["league"], g["home"], g["away"], g["score"]) for g in official.gt(start, end)],
+                             [("gt12", "Vendetta", "King", "3-1")])
+
 
 if __name__ == "__main__":
     unittest.main()

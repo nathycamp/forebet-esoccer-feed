@@ -18,6 +18,7 @@ from apscheduler.schedulers.background import BackgroundScheduler
 from flask import Flask, Response, jsonify, request
 
 import esoccerbet
+import official
 import telegram_bot
 from prediction_engine import MODEL_VERSION, predict_feed
 from prediction_engine.model import tag
@@ -38,6 +39,7 @@ cache = {
 }
 MAX_CACHE_AGE_SECONDS = 6 * 60
 ESOCCERBET_INTERVAL_SECONDS = 60
+OFFICIAL_INTERVAL_SECONDS = 60
 READER_TIMEOUT_SECONDS = int(os.environ.get("READER_TIMEOUT_SECONDS", "100"))
 # Picks flip from "wait" to "play" only 2-4 minutes before kickoff, so read every minute.
 READER_INTERVAL_SECONDS = int(os.environ.get("READER_INTERVAL_SECONDS", "60"))
@@ -321,6 +323,7 @@ def health():
             "last_status": cache["last_status"],
             "free_proxies_ready": len(load_free_proxy_pool()),
             "esoccerbet": dict(esoccerbet.STATUS),
+            "official": {name: dict(status) for name, status in official.STATUS.items()},
             "league_age_seconds": {key: round((datetime.now(timezone.utc) - datetime.fromisoformat(page["fetched_at"].replace("Z", "+00:00"))).total_seconds())
                                    for key, page in cache["leagues"].items() if page.get("fetched_at")},
             "telegram": dict(telegram_bot.STATUS),
@@ -351,7 +354,7 @@ def merge_backup(leagues, games, now):
                 known.setdefault(str(row.get(side, "")).casefold(), (key, row.get(side)))
     added = {}
     for game in games:
-        league = backup_league(game["minutes"], game["home"], game["away"], known)
+        league = game.get("league") or backup_league(game["minutes"], game["home"], game["away"], known)
         if league in leagues:
             added.setdefault(league, []).append(game)
     merged = {}
@@ -370,7 +373,7 @@ def merge_backup(leagues, games, now):
                 row = same[0]
                 if game["score"] and row.get("status") != "played":
                     row.update(status="played", actual_score=game["score"], live_score=None, match_clock=None,
-                               result_source="esoccerbet")
+                               result_source=game.get("source", "esoccerbet"))
                 continue
             status = "played" if game["score"] else "upcoming" if game["kickoff"] > now else "live"
             row = {"home_tag": known.get(game["home"].casefold(), (key, game["home"]))[1],
@@ -378,7 +381,7 @@ def merge_backup(leagues, games, now):
                    "home_club": game["home_club"], "away_club": game["away_club"],
                    "kickoff_utc": game["kickoff"].isoformat(), "p1": 33.3, "px": 33.3, "p2": 33.4, "pred": "X",
                    "correct_score": None, "avg_goals": None, "status": status, "actual_score": game["score"],
-                   "live_score": None, "match_clock": None, "source": "esoccerbet"}
+                   "live_score": None, "match_clock": None, "source": game.get("source", "esoccerbet")}
             rows.append(row)
             index.setdefault((tag(row["home_tag"]), tag(row["away_tag"])), []).append(row)
         merged[key] = sorted(rows, key=lambda row: row["kickoff_utc"])
@@ -405,15 +408,18 @@ def snapshot(selected, now):
                 clock_mismatch = True
         forebet_stale = cache["stale"]
         fetched_at = cache["fetched_at"]
-    backup_at = esoccerbet.STATUS["fetched_at"]
-    leagues = merge_backup(leagues, esoccerbet.rows(), now)
+    # The leagues' own feeds first (official.py), then esoccerbet: the first source listing a game wins.
+    leagues = merge_backup(leagues, official.rows() + esoccerbet.rows(), now)
+    fetched = {name: status["fetched_at"] for name, status in official.STATUS.items() if status.get("fetched_at")}
+    if esoccerbet.STATUS["fetched_at"]:
+        fetched["esoccerbet"] = esoccerbet.STATUS["fetched_at"]
+    backup_at = max(fetched.values(), key=parse_time) if fetched else None
     for key, rows in leagues.items():
-        # A league esoccerbet keeps current counts as fresh while Forebet is stuck or down.
-        from_backup = isinstance(rows, list) and any(
-            row.get("source") == "esoccerbet" or row.get("result_source") == "esoccerbet" for row in rows)
-        if backup_at and from_backup and (not league_fetched_at[key]
-                                          or parse_time(league_fetched_at[key]) < parse_time(backup_at)):
-            league_fetched_at[key] = backup_at
+        # A league kept current by a backup source counts as fresh while Forebet is stuck or down.
+        sources = {row.get("source") or row.get("result_source") for row in rows if isinstance(rows, list)} & set(fetched)
+        newest = max((fetched[name] for name in sources), key=parse_time) if sources else None
+        if newest and (not league_fetched_at[key] or parse_time(league_fetched_at[key]) < parse_time(newest)):
+            league_fetched_at[key] = newest
     too_old = any(not value or (now - parse_time(value)).total_seconds() > MAX_CACHE_AGE_SECONDS
                   for value in league_fetched_at.values())
     backup_fresh = bool(backup_at) and (now - parse_time(backup_at)).total_seconds() <= MAX_CACHE_AGE_SECONDS
@@ -1009,6 +1015,18 @@ def start_scheduler():
         max_instances=1,
         coalesce=True,
         id="forebet-reader",
+    )
+    # The leagues' own feeds: history once at start-up, then the recent window every minute.
+    scheduler.add_job(official.refresh, "date", run_date=datetime.now(timezone.utc), kwargs={"history": True},
+                      id="official-history")
+    scheduler.add_job(
+        official.refresh,
+        "interval",
+        seconds=OFFICIAL_INTERVAL_SECONDS,
+        next_run_time=datetime.now(timezone.utc) + timedelta(seconds=90),
+        max_instances=1,
+        coalesce=True,
+        id="official-reader",
     )
     # The backup source: plain requests, every minute, whatever Forebet is doing.
     scheduler.add_job(
