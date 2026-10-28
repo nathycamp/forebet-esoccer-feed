@@ -173,6 +173,23 @@ class EsoccerbetTest(unittest.TestCase):
             self.assertEqual([(g["league"], g["home"], g["away"], g["score"]) for g in official.gt(start, end)],
                              [("gt12", "Vendetta", "King", "3-1")])
 
+    def test_an_official_result_counts_once_it_holds(self):
+        import official
+        from datetime import timedelta
+        official.ROWS.clear()
+        kickoff = NOW - timedelta(minutes=15)
+        first = official.game("gt12", "Eminem", "Rossi", "", "", kickoff, "0-2", "played", "gtleagues")
+        official.remember([first], NOW)
+        self.assertEqual(official.rows()[0]["status"], "live")                    # 0-2 just appeared: not yet
+        official.remember([dict(first, score="2-3")], NOW + timedelta(minutes=1))   # it changed: wait again
+        self.assertIsNone(official.rows()[0]["score"])
+        official.remember([dict(first, score="2-3")], NOW + timedelta(minutes=4))
+        self.assertEqual((official.rows()[0]["score"], official.rows()[0]["status"]), ("2-3", "played"))
+        old = official.game("gt12", "A", "B", "", "", NOW - timedelta(days=2), "1-1", "played", "gtleagues")
+        official.remember([old], NOW)                                              # history counts at once
+        self.assertEqual(next(g for g in official.rows() if g["home"] == "A")["score"], "1-1")
+        official.ROWS.clear()
+
 
 if __name__ == "__main__":
     unittest.main()

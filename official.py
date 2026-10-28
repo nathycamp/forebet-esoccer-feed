@@ -32,6 +32,7 @@ USER_AGENT = "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_0) AppleWebKit/537.36 (K
 GT_HEADERS = {"Origin": "https://www.gtleagues.com", "Referer": "https://www.gtleagues.com/"}
 HISTORY_DAYS = 7          # the replay (28 Oct): 7 days of history beat 3
 KEEP_DAYS = 8
+SETTLED_S = 150           # a final score must read the same this long apart (two refreshes or more)
 WINDOW = (timedelta(hours=3), timedelta(hours=2))     # each refresh reads games from 3 hours ago to 2 hours ahead
 GT_PAGE = 100
 ESB_WORKERS = 8
@@ -142,11 +143,23 @@ def gt(start, end):
 
 # ------------------------------------------------------------------ store
 def remember(games, now):
+    """Keep the games read. A final score counts only once the same score was read SETTLED_S apart (28 Oct: GT's
+    feed showed Eminem v Rossi finished at 0-2 for a few minutes before its final 2-3); until then it is live.
+    History read at start-up has long been final, so it counts at once."""
     with LOCK:
         for one in games:
             key = (one["league"], one["home"].casefold(), one["away"].casefold(), one["kickoff"])
-            if one["score"] or key not in ROWS or ROWS[key]["status"] != "played":
-                ROWS[key] = one
+            before = ROWS.get(key)
+            if one["score"]:
+                old_enough = now - one["kickoff"] > timedelta(hours=1)
+                seen = (before or {}).get("score_seen") if (before or {}).get("raw_score") == one["score"] else None
+                seen = seen or now
+                settled = old_enough or (now - seen).total_seconds() >= SETTLED_S
+                one = dict(one, raw_score=one["score"], score_seen=seen,
+                           score=one["score"] if settled else None, status="played" if settled else "live")
+            elif before and before.get("score"):
+                continue                                 # a result read before stays
+            ROWS[key] = one
         cutoff = now - timedelta(days=KEEP_DAYS)
         for key in [key for key, one in ROWS.items() if one["kickoff"] < cutoff]:
             del ROWS[key]
