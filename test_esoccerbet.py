@@ -140,7 +140,9 @@ class EsoccerbetTest(unittest.TestCase):
                          [("Krkula", None), ("Mani", "esportsbattle"), ("Duka", "esportsbattle-new")])   # watched only
         games[1] = dict(games[1], score="2-2", status="played")
         merged = app.merge_backup(leagues, games, NOW)
-        self.assertNotIn("Duka", [r["home_tag"] for r in merged["esb8"]])       # its results stay out of the history
+        duka = next(r for r in merged["esb8"] if r["home_tag"] == "Duka")      # its result is listed (bets settle)...
+        self.assertEqual((duka["actual_score"], duka["source"]), ("2-2", "esportsbattle-new"))
+        self.assertNotIn(duka, app.model_rows(merged["esb8"]))                 # ...but stays out of the history
         self.assertEqual([r["home_tag"] for r in merged["h2hgg"]], ["TUSK", "NEWBIE"])
 
     def test_official_feeds_are_read(self):

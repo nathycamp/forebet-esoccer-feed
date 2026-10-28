@@ -364,10 +364,9 @@ def merge_backup(leagues, games, now):
         if (game.get("source") in OFFICIAL_SOURCES and league in official.KNOWN_PLAYERS_ONLY
                 and not {game["home"].casefold(), game["away"].casefold()} <= covered.get(league, set())):
             # A tournament Forebet does not cover (see official.KNOWN_PLAYERS_ONLY): its results stay out of the
-            # model's history, but its coming games are listed as source "<feed>-new" so the bots watch them
-            # (never placed) and their readings can show later whether these tournaments earn their place.
-            if game.get("score"):
-                continue
+            # model's history (the models skip source "<feed>-new"), but its games are listed so the bots watch
+            # them (never placed), their would-bets settle, and their readings can show later whether these
+            # tournaments earn their place (28 Oct: llulle v Glumac was watched but never got a result).
             game = dict(game, source=game["source"] + "-new")
         added.setdefault(league, []).append(game)
     merged = {}
@@ -629,8 +628,15 @@ def waiting(row):
     return bool(game) and game["played_share"] < PREVIOUS_GAME_MIN_SHARE
 
 
+def model_rows(rows):
+    """The rows a model may learn from: not the results of tournaments Forebet does not cover (source *-new)."""
+    return [row for row in rows if not (str(row.get("source", "")).endswith("-new") and row.get("status") == "played")]
+
+
 def build_picks(feed, now):
     """Goal calls at each league's usual line, with a weak favourite as context."""
+    feed = dict(feed, leagues={key: model_rows(rows) if isinstance(rows, list) else rows
+                               for key, rows in feed["leagues"].items()})
     feed, delays = adjust_delays(feed)
     listed = {(key, row["home_tag"], row["away_tag"], row["kickoff_utc"]): row["listed_kickoff_utc"]
               for key in delays for row in feed["leagues"][key] if "listed_kickoff_utc" in row}
