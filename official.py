@@ -9,7 +9,10 @@ players and final score:
   its own pages (their Origin/Referer), so it is read with those headers, and through GT_PROXY when set.
 
 Nothing is stored: the games read are kept in memory for KEEP_DAYS (HISTORY_DAYS are read at start-up), and the
-feed merges them into the Forebet rows (app.merge_backup) like esoccerbet's.
+feed merges them into the Forebet rows (app.merge_backup) like esoccerbet's. ESportsBattle and GT run more
+tournaments than Forebet lists; only games between players Forebet lists are merged for those leagues
+(KNOWN_PLAYERS_ONLY): on the replay of 2,461 recorded games (28 Oct) that beat Forebet's own data (+17.8 vs +16.6
+units, worst learner version +4.4 vs +2.7), while all players served best for H2H (the same single league).
 """
 import json
 import logging
@@ -27,11 +30,12 @@ H2H = "https://api-h2h.cdn-hudstats.com/v1"
 GT = "https://api.gtleagues.com/api"
 USER_AGENT = "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_0) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0 Safari/537.36"
 GT_HEADERS = {"Origin": "https://www.gtleagues.com", "Referer": "https://www.gtleagues.com/"}
-HISTORY_DAYS = 3
-KEEP_DAYS = 4
+HISTORY_DAYS = 7          # the replay (28 Oct): 7 days of history beat 3
+KEEP_DAYS = 8
 WINDOW = (timedelta(hours=3), timedelta(hours=2))     # each refresh reads games from 3 hours ago to 2 hours ahead
 GT_PAGE = 100
 ESB_WORKERS = 8
+KNOWN_PLAYERS_ONLY = {"esb8", "volta6", "gt12"}
 
 ROWS = {}            # (league, home, away, kickoff) -> game
 STATUS = {}          # source -> {"fetched_at", "last_error", "games"}

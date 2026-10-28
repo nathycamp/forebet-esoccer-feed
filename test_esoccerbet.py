@@ -130,6 +130,14 @@ class EsoccerbetTest(unittest.TestCase):
         merged = app.merge_backup(leagues, games, NOW)
         self.assertEqual((merged["gt12"][0]["actual_score"], merged["gt12"][0]["result_source"]), ("4-3", "gtleagues"))
         self.assertEqual((merged["esb8"][0]["home_tag"], merged["esb8"][0]["source"]), ("Mani", "esportsbattle"))
+        # Where Forebet lists the league, only its players' games come in (other tournaments stay out); H2H takes all.
+        leagues = {"esb8": [forebet_row("Krkula", "Mani", "2026-10-27T19:00:00+00:00", "played", "1-1")],
+                   "h2hgg": [forebet_row("TUSK", "DART", "2026-10-27T19:00:00+00:00", "played", "1-1")]}
+        games = [dict(games[1]), dict(games[1], home="Duka", away="borees"),
+                 dict(games[1], league="h2hgg", home="NEWBIE", away="TUSK", source="h2hggl")]
+        merged = app.merge_backup(leagues, games, NOW)
+        self.assertEqual([r["home_tag"] for r in merged["esb8"]], ["Krkula", "Mani"])
+        self.assertEqual([r["home_tag"] for r in merged["h2hgg"]], ["TUSK", "NEWBIE"])
 
     def test_official_feeds_are_read(self):
         import official

@@ -330,6 +330,7 @@ def health():
         })
 
 
+OFFICIAL_SOURCES = {"esportsbattle", "h2hggl", "gtleagues"}
 BACKUP_MATCH_MINUTES = 6       # an esoccerbet game is a Forebet game with the same players kicking off this close
 
 
@@ -352,11 +353,16 @@ def merge_backup(leagues, games, now):
         for row in rows if isinstance(rows, list) else []:
             for side in ("home_tag", "away_tag"):
                 known.setdefault(str(row.get(side, "")).casefold(), (key, row.get(side)))
+    listed = {key for key, rows in leagues.items() if isinstance(rows, list) and rows}
     added = {}
     for game in games:
         league = game.get("league") or backup_league(game["minutes"], game["home"], game["away"], known)
-        if league in leagues:
-            added.setdefault(league, []).append(game)
+        if league not in leagues:
+            continue
+        if (game.get("source") in OFFICIAL_SOURCES and league in official.KNOWN_PLAYERS_ONLY and league in listed
+                and not all(known.get(name.casefold(), (None,))[0] == league for name in (game["home"], game["away"]))):
+            continue             # a tournament Forebet does not cover (see official.KNOWN_PLAYERS_ONLY)
+        added.setdefault(league, []).append(game)
     merged = {}
     for key, rows in leagues.items():
         rows = [dict(row) for row in rows] if isinstance(rows, list) else []
