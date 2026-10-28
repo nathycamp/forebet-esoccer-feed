@@ -32,7 +32,8 @@ USER_AGENT = "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_0) AppleWebKit/537.36 (K
 GT_HEADERS = {"Origin": "https://www.gtleagues.com", "Referer": "https://www.gtleagues.com/"}
 HISTORY_DAYS = 7          # the replay (28 Oct): 7 days of history beat 3
 KEEP_DAYS = 8
-SETTLED_S = 150           # a final score must read the same this long apart (two refreshes or more)
+SETTLED_S = {"gtleagues": 150}   # a final score must read the same this long apart (GT showed a wrong 0-2)
+SETTLED_DEFAULT_S = 55            # the other feeds: two refreshes a minute apart
 WINDOW = (timedelta(hours=3), timedelta(hours=2))     # each refresh reads games from 3 hours ago to 2 hours ahead
 GT_PAGE = 100
 ESB_WORKERS = 8
@@ -154,7 +155,7 @@ def remember(games, now):
                 old_enough = now - one["kickoff"] > timedelta(hours=1)
                 seen = (before or {}).get("score_seen") if (before or {}).get("raw_score") == one["score"] else None
                 seen = seen or now
-                settled = old_enough or (now - seen).total_seconds() >= SETTLED_S
+                settled = old_enough or (now - seen).total_seconds() >= SETTLED_S.get(one["source"], SETTLED_DEFAULT_S)
                 one = dict(one, raw_score=one["score"], score_seen=seen,
                            score=one["score"] if settled else None, status="played" if settled else "live")
             elif before and before.get("score"):
