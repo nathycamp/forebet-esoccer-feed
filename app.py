@@ -353,14 +353,16 @@ def merge_backup(leagues, games, now):
         for row in rows if isinstance(rows, list) else []:
             for side in ("home_tag", "away_tag"):
                 known.setdefault(str(row.get(side, "")).casefold(), (key, row.get(side)))
-    listed = {key for key, rows in leagues.items() if isinstance(rows, list) and rows}
+    covered = {league: set(names) for league, names in official.FOREBET_PLAYERS.items()}
+    for name, (league, _) in known.items():
+        covered.setdefault(league, set()).add(name)
     added = {}
     for game in games:
         league = game.get("league") or backup_league(game["minutes"], game["home"], game["away"], known)
         if league not in leagues:
             continue
-        if (game.get("source") in OFFICIAL_SOURCES and league in official.KNOWN_PLAYERS_ONLY and league in listed
-                and not all(known.get(name.casefold(), (None,))[0] == league for name in (game["home"], game["away"]))):
+        if (game.get("source") in OFFICIAL_SOURCES and league in official.KNOWN_PLAYERS_ONLY
+                and not {game["home"].casefold(), game["away"].casefold()} <= covered.get(league, set())):
             continue             # a tournament Forebet does not cover (see official.KNOWN_PLAYERS_ONLY)
         added.setdefault(league, []).append(game)
     merged = {}

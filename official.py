@@ -36,6 +36,9 @@ WINDOW = (timedelta(hours=3), timedelta(hours=2))     # each refresh reads games
 GT_PAGE = 100
 ESB_WORKERS = 8
 KNOWN_PLAYERS_ONLY = {"esb8", "volta6", "gt12"}
+# The players Forebet listed (our picked games of 24-27 Oct), so the filter holds while Forebet is down too.
+with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "forebet_players.json")) as handle:
+    FOREBET_PLAYERS = {league: {name.casefold() for name in names} for league, names in json.load(handle).items()}
 
 ROWS = {}            # (league, home, away, kickoff) -> game
 STATUS = {}          # source -> {"fetched_at", "last_error", "games"}
