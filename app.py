@@ -363,7 +363,12 @@ def merge_backup(leagues, games, now):
             continue
         if (game.get("source") in OFFICIAL_SOURCES and league in official.KNOWN_PLAYERS_ONLY
                 and not {game["home"].casefold(), game["away"].casefold()} <= covered.get(league, set())):
-            continue             # a tournament Forebet does not cover (see official.KNOWN_PLAYERS_ONLY)
+            # A tournament Forebet does not cover (see official.KNOWN_PLAYERS_ONLY): its results stay out of the
+            # model's history, but its coming games are listed as source "<feed>-new" so the bots watch them
+            # (never placed) and their readings can show later whether these tournaments earn their place.
+            if game.get("score"):
+                continue
+            game = dict(game, source=game["source"] + "-new")
         added.setdefault(league, []).append(game)
     merged = {}
     for key, rows in leagues.items():
