@@ -461,5 +461,12 @@ class ReaderServiceTests(unittest.TestCase):
         kill.assert_called_once_with(12345, app.signal.SIGKILL)
 
 
+    def test_a_claim_goes_to_the_first_device_only(self):
+        client = app.app.test_client()
+        first = client.post("/claim", json={"key": "2026-10-29/A|B|k", "device": "mac"}).get_json()
+        second = client.post("/claim", json={"key": "2026-10-29/A|B|k", "device": "htch"}).get_json()
+        self.assertEqual((first["device"], second["device"]), ("mac", "mac"))
+        self.assertEqual(client.post("/claim", json={"key": "x"}).status_code, 400)
+
 if __name__ == "__main__":
     unittest.main()

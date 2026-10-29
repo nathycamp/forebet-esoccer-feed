@@ -446,6 +446,29 @@ def snapshot(selected, now):
     }
 
 
+# Fast claims for the live bots (29 Oct): which device bets a game, decided here in well under a second instead
+# of a GitHub push (4-34 s, while SportyBet's price moves). The first device to ask holds the key; the bots fall
+# back to their GitHub claim when this does not answer. Kept in memory for two days.
+CLAIMS = {}
+CLAIMS_LOCK = threading.Lock()
+CLAIM_KEEP_S = 2 * 86400
+
+
+@app.post("/claim")
+def claim():
+    body = request.get_json(silent=True) or {}
+    key, device = str(body.get("key", ""))[:200], str(body.get("device", ""))[:64]
+    if not key or not device:
+        return jsonify({"error": "key and device are needed"}), 400
+    now = datetime.now(timezone.utc).timestamp()
+    with CLAIMS_LOCK:
+        if len(CLAIMS) > 5000:
+            for old in [k for k, (_, at) in CLAIMS.items() if now - at > CLAIM_KEEP_S]:
+                del CLAIMS[old]
+        holder, _ = CLAIMS.setdefault(key, (device, now))
+    return jsonify({"key": key, "device": holder})
+
+
 @app.get("/predictions")
 def predictions():
     try:
