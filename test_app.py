@@ -473,6 +473,20 @@ class ReaderServiceTests(unittest.TestCase):
         blocked = client.post("/claim", json={"key": "2026-11-03/C|D|k", "device": "htch-runtime-2"}).get_json()
         other = client.post("/claim", json={"key": "2026-11-03/C|D|k", "device": "mac"}).get_json()
         self.assertEqual((blocked["device"], other["device"]), ("blocked", "mac"))
+        self.assertIn("htch-runtime-2", client.get("/devices").get_json()["seen"])
+
+    def test_devices_are_blocked_and_unblocked_only_with_the_key(self):
+        import hashlib
+        client = app.app.test_client()
+        with patch.object(app, "ADMIN_HASH", hashlib.sha256(b"secret").hexdigest()), \
+                patch.object(app, "BLOCKED_DEVICES", set()):
+            self.assertEqual(client.post("/block", json={"key": "wrong", "device": "vm"}).status_code, 403)
+            client.post("/block", json={"key": "secret", "device": "vm", "on": True})
+            self.assertEqual(client.post("/claim", json={"key": "k2", "device": "vm"}).get_json()["device"], "blocked")
+            client.post("/block", json={"key": "secret", "device": "vm", "on": False})
+            self.assertEqual(client.post("/claim", json={"key": "k2", "device": "vm"}).get_json()["device"], "vm")
+        with patch.object(app, "ADMIN_HASH", ""):
+            self.assertEqual(client.post("/block", json={"key": "", "device": "vm"}).status_code, 403)
 
 if __name__ == "__main__":
     unittest.main()

@@ -3,6 +3,7 @@
 import logging
 import gzip
 import hashlib
+import hmac
 import json
 import math
 import os
@@ -454,7 +455,13 @@ CLAIMS_LOCK = threading.Lock()
 CLAIM_KEEP_S = 2 * 86400
 # Devices that may not bet (3 Nov: htch-runtime-2 could not sync records, so it ignored restarts and kept betting on
 # its 31 Oct settings): every claim it asks for is answered as held by "blocked", so it never places a bet.
-BLOCKED_DEVICES = {"htch-runtime-2"}
+# Set from Telegram (/block, /unblock) through POST /block; the bots send it again after a redeploy.
+BLOCKED_DEVICES = {name for name in os.environ.get("FOREBET_BLOCKED_DEVICES", "htch-runtime-2").split(",") if name}
+# When each device last asked for a claim (blocked ones too): a device that still bets but no longer syncs its
+# records shows up here.
+DEVICE_SEEN = {}
+# /block needs the bots' key: the SHA-256 of what they send must match this (only a hash is kept here).
+ADMIN_HASH = os.environ.get("FOREBET_ADMIN_HASH", "")
 
 
 @app.post("/claim")
@@ -463,6 +470,7 @@ def claim():
     key, device = str(body.get("key", ""))[:200], str(body.get("device", ""))[:64]
     if not key or not device:
         return jsonify({"error": "key and device are needed"}), 400
+    DEVICE_SEEN[device] = datetime.now(timezone.utc).isoformat()
     if device in BLOCKED_DEVICES:
         return jsonify({"key": key, "device": "blocked"})
     now = datetime.now(timezone.utc).timestamp()
@@ -472,6 +480,23 @@ def claim():
                 del CLAIMS[old]
         holder, _ = CLAIMS.setdefault(key, (device, now))
     return jsonify({"key": key, "device": holder})
+
+
+@app.get("/devices")
+def devices():
+    return jsonify({"seen": dict(DEVICE_SEEN), "blocked": sorted(BLOCKED_DEVICES)})
+
+
+@app.post("/block")
+def block():
+    body = request.get_json(silent=True) or {}
+    key, device = str(body.get("key", "")), str(body.get("device", ""))[:64]
+    if not ADMIN_HASH or not hmac.compare_digest(hashlib.sha256(key.encode()).hexdigest(), ADMIN_HASH):
+        return jsonify({"error": "not allowed"}), 403
+    if not device:
+        return jsonify({"error": "device is needed"}), 400
+    (BLOCKED_DEVICES.add if body.get("on", True) else BLOCKED_DEVICES.discard)(device)
+    return jsonify({"blocked": sorted(BLOCKED_DEVICES)})
 
 
 @app.get("/predictions")
