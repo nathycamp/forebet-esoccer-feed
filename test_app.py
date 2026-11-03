@@ -468,5 +468,11 @@ class ReaderServiceTests(unittest.TestCase):
         self.assertEqual((first["device"], second["device"]), ("mac", "mac"))
         self.assertEqual(client.post("/claim", json={"key": "x"}).status_code, 400)
 
+    def test_a_blocked_device_never_holds_a_claim(self):
+        client = app.app.test_client()
+        blocked = client.post("/claim", json={"key": "2026-11-03/C|D|k", "device": "htch-runtime-2"}).get_json()
+        other = client.post("/claim", json={"key": "2026-11-03/C|D|k", "device": "mac"}).get_json()
+        self.assertEqual((blocked["device"], other["device"]), ("blocked", "mac"))
+
 if __name__ == "__main__":
     unittest.main()

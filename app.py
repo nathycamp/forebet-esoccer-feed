@@ -452,6 +452,9 @@ def snapshot(selected, now):
 CLAIMS = {}
 CLAIMS_LOCK = threading.Lock()
 CLAIM_KEEP_S = 2 * 86400
+# Devices that may not bet (3 Nov: htch-runtime-2 could not sync records, so it ignored restarts and kept betting on
+# its 31 Oct settings): every claim it asks for is answered as held by "blocked", so it never places a bet.
+BLOCKED_DEVICES = {"htch-runtime-2"}
 
 
 @app.post("/claim")
@@ -460,6 +463,8 @@ def claim():
     key, device = str(body.get("key", ""))[:200], str(body.get("device", ""))[:64]
     if not key or not device:
         return jsonify({"error": "key and device are needed"}), 400
+    if device in BLOCKED_DEVICES:
+        return jsonify({"key": key, "device": "blocked"})
     now = datetime.now(timezone.utc).timestamp()
     with CLAIMS_LOCK:
         if len(CLAIMS) > 5000:
