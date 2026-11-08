@@ -27,6 +27,11 @@ LEAGUES = {
     "h2hgg": "https://www.forebet.com/en/esoccer/esoccer-h2h-gg-league-8-mins-play",
     "gt12": "https://www.forebet.com/en/esoccer/esoccer-liga-pro-12-mins-play",
 }
+# READER_LEAGUES (comma list, default all): the leagues read, e.g. "esb8,volta6,h2hgg" (8 Nov: the bots no longer use
+# GT, and each league is a page load of the browser every cycle; the owner asked to cut the Railway bill).
+_ONLY = [key.strip() for key in os.environ.get("READER_LEAGUES", "").split(",") if key.strip()]
+if _ONLY:
+    LEAGUES = {key: url for key, url in LEAGUES.items() if key in _ONLY}
 MATCH_MINUTES = {"esb8": 8, "volta6": 6, "h2hgg": 8, "gt12": 12}
 FIXTURE_FIELDS = r"""() => Array.from(document.querySelectorAll('.rcnt'))
     .filter(row => row.querySelector(':scope > .predict, :scope > .predict_y, :scope > .predict_no'))
