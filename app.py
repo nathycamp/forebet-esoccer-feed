@@ -482,6 +482,21 @@ def claim():
     return jsonify({"key": key, "device": holder})
 
 
+@app.post("/release")
+def release():
+    """Give a game back (13 Nov, the user: "yes make it pass to another device"): the holder could not place it
+    (the line closed before Place Bet was pressed), so the next device to ask may take it. Only the holder can."""
+    body = request.get_json(silent=True) or {}
+    key, device = str(body.get("key", ""))[:200], str(body.get("device", ""))[:64]
+    if not key or not device:
+        return jsonify({"error": "key and device are needed"}), 400
+    with CLAIMS_LOCK:
+        released = CLAIMS.get(key, (None,))[0] == device
+        if released:
+            del CLAIMS[key]
+    return jsonify({"key": key, "released": released})
+
+
 @app.get("/devices")
 def devices():
     return jsonify({"seen": dict(DEVICE_SEEN), "blocked": sorted(BLOCKED_DEVICES)})
