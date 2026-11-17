@@ -474,7 +474,7 @@ CLAIM_KEEP_S = 2 * 86400
 # Devices that may not bet (3 Nov: htch-runtime-2 could not sync records, so it ignored restarts and kept betting on
 # its 31 Oct settings): every claim it asks for is answered as held by "blocked", so it never places a bet.
 # Set from Telegram (/block, /unblock) through POST /block; the bots send it again after a redeploy.
-BLOCKED_DEVICES = {name for name in os.environ.get("FOREBET_BLOCKED_DEVICES", "htch-runtime-2").split(",") if name}
+BLOCKED_DEVICES = {name for name in os.environ.get("FOREBET_BLOCKED_DEVICES", "").split(",") if name}
 # When each device last asked for a claim (blocked ones too): a device that still bets but no longer syncs its
 # records shows up here.
 DEVICE_SEEN = {}

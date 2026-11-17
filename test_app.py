@@ -481,6 +481,8 @@ class ReaderServiceTests(unittest.TestCase):
 
     def test_a_blocked_device_never_holds_a_claim(self):
         client = app.app.test_client()
+        app.BLOCKED_DEVICES.add("htch-runtime-2")      # no device is blocked by default since 17 Nov
+        self.addCleanup(app.BLOCKED_DEVICES.discard, "htch-runtime-2")
         blocked = client.post("/claim", json={"key": "2026-11-03/C|D|k", "device": "htch-runtime-2"}).get_json()
         other = client.post("/claim", json={"key": "2026-11-03/C|D|k", "device": "mac"}).get_json()
         self.assertEqual((blocked["device"], other["device"]), ("blocked", "mac"))
