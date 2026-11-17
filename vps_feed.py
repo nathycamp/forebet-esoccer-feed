@@ -9,6 +9,7 @@ with no Chrome, no proxy, no Telegram, no scheduler package: two small threads.
 - Every PLAYERS_S: the players Railway's feed lists, saved to STATE_DIR/players.json, so games between players the
   main feed knows are treated the same here (others are "<source>-new", watched but never bet) even when Railway
   is down.
+- Every COPY_S: Railway's Forebet H2H games (the ones the bots bet), so they are here when Railway is down.
 - Every COMPARE_S: Railway's /picks against this copy's, one short line in STATE_DIR/compare.jsonl (kept under
   COMPARE_MAX_BYTES), to judge whether the bots could use this copy when Railway is down. The bots do not read it
   yet (shadow).
@@ -23,12 +24,16 @@ import threading
 import time
 import types
 import urllib.request
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 HOST, PORT = os.environ.get("HOST", "127.0.0.1"), int(os.environ.get("PORT", "8791"))
 MAIN_FEED = os.environ.get("MAIN_FEED", "https://forebet-esoccer-feed-production.up.railway.app")
 STATE_DIR = os.environ.get("STATE_DIR", os.path.dirname(os.path.abspath(__file__)))
 OFFICIAL_S, PLAYERS_S, COMPARE_S = 60, 600, 600
+# 17 Nov, the user: "yes do step 2": every COPY_S the H2H games Railway read from Forebet (the H2H players the bots bet;
+# the official H2H feed lists another group) are copied here, the coming ones and the last COPY_KEEP_H hours, and kept
+# on disk, so a Railway outage does not hide the next H2H games from the bots.
+COPY_S, COPY_KEEP_H, COPY_LEAGUES = 180, 3, ("h2hgg",)
 COMPARE_MAX_BYTES = 5_000_000
 LEAGUES = {"esb8": "https://www.forebet.com/en/esoccer/esoccer-battle-8-mins-play",
            "volta6": "https://www.forebet.com/en/esoccer/esoccer-battle-volta-6-mins-play",
@@ -38,6 +43,7 @@ LEAGUES = {"esb8": "https://www.forebet.com/en/esoccer/esoccer-battle-8-mins-pla
 # scheduler package is not installed (the two threads below do its work).
 _reader = types.ModuleType("reader")
 _reader.LEAGUES = LEAGUES
+_reader.ALL_LEAGUES = LEAGUES      # app.py serves these (17 Nov: Railway reads Forebet for H2H only)
 _reader.demote_last_proxy = lambda *args, **kwargs: None
 _reader.load_free_proxy_pool = lambda *args, **kwargs: []
 _reader.refresh_free_proxy_pool = lambda *args, **kwargs: None
@@ -53,6 +59,7 @@ official.gt = lambda start, end: []          # GT is not read here
 logger = logging.getLogger("vps_feed")
 PLAYERS_FILE = os.path.join(STATE_DIR, "players.json")
 COMPARE_FILE = os.path.join(STATE_DIR, "compare.jsonl")
+COPY_FILE = os.path.join(STATE_DIR, "forebet_copy.json")
 BASE_PLAYERS = {league: set(names) for league, names in official.FOREBET_PLAYERS.items()}
 
 
@@ -98,6 +105,59 @@ def load_players():
             return {league: set(names) for league, names in json.load(handle).items()}
     except (OSError, ValueError):
         return {}
+
+
+def forebet_rows(rows, now=None):
+    """The rows Forebet gave Railway (official and backup rows carry a source) for games from COPY_KEEP_H ago on."""
+    now = now or datetime.now(timezone.utc)
+    cutoff = (now - timedelta(hours=COPY_KEEP_H)).isoformat()
+    return [row for row in rows if isinstance(row, dict) and not row.get("source") and row.get("kickoff_utc", "") >= cutoff]
+
+
+def use_copy(copied, fetched_at):
+    """Put the copied Forebet games where the feed keeps a league it read itself."""
+    with app.cache_lock:
+        for league, rows in copied.items():
+            previous = app.cache["leagues"].get(league)
+            fixtures = app.keep_progress(rows, previous["fixtures"]) if previous else rows
+            app.cache["leagues"][league] = {"status": "ok", "fixtures": fixtures, "fetched_at": fetched_at,
+                                            "changed_at": fetched_at}
+
+
+def copy_forebet(fetch_json=None, now=None):
+    """Copy Railway's Forebet games of COPY_LEAGUES (kept on disk). False when Railway did not answer."""
+    fetch_json = fetch_json or fetch
+    copied = {}
+    for league in COPY_LEAGUES:
+        try:
+            data = fetch_json(f"{MAIN_FEED}/predictions?league={league}", timeout=60)
+        except Exception as exc:
+            logger.warning("forebet copy: main feed not read (%s)", type(exc).__name__)
+            return False
+        rows = (data.get("leagues") or {}).get(league)
+        if isinstance(rows, list):
+            copied[league] = forebet_rows(rows, now)
+    if not copied:
+        return False
+    fetched_at = (now or datetime.now(timezone.utc)).isoformat().replace("+00:00", "Z")
+    use_copy(copied, fetched_at)
+    tmp = COPY_FILE + ".tmp"
+    with open(tmp, "w") as handle:
+        json.dump({"fetched_at": fetched_at, "leagues": copied}, handle)
+    os.replace(tmp, COPY_FILE)
+    return True
+
+
+def load_copy(now=None):
+    """The last copy on disk (after a restart while Railway is down)."""
+    try:
+        with open(COPY_FILE) as handle:
+            saved = json.load(handle)
+    except (OSError, ValueError):
+        return False
+    copied = {league: forebet_rows(rows, now) for league, rows in (saved.get("leagues") or {}).items()}
+    use_copy(copied, saved.get("fetched_at"))
+    return True
 
 
 def board_key(row):
@@ -151,7 +211,9 @@ def every(seconds, job, first_delay=0):
 def main():
     os.makedirs(STATE_DIR, exist_ok=True)
     use_players(load_players())
+    load_copy()
     every(PLAYERS_S, copy_players)
+    every(COPY_S, copy_forebet, first_delay=20)
     threading.Thread(target=lambda: official.refresh(history=True), daemon=True).start()   # serve while it loads
     every(OFFICIAL_S, official.refresh, first_delay=OFFICIAL_S * 3)
     every(COMPARE_S, compare_once, first_delay=120)
