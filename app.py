@@ -24,7 +24,7 @@ import telegram_bot
 from prediction_engine import MODEL_VERSION, predict_feed
 from prediction_engine.model import tag
 from prediction_engine.validation import LEAGUES as LEAGUE_MINUTES, utc as parse_time
-from reader import LEAGUES, demote_last_proxy, load_free_proxy_pool, refresh_free_proxy_pool
+from reader import ALL_LEAGUES as LEAGUES, demote_last_proxy, load_free_proxy_pool, refresh_free_proxy_pool
 
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")

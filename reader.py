@@ -30,6 +30,10 @@ LEAGUES = {
 # READER_LEAGUES (comma list, default all): the leagues read, e.g. "esb8,volta6,h2hgg" (8 Nov: the bots no longer use
 # GT, and each league is a page load of the browser every cycle; the owner asked to cut the Railway bill).
 _ONLY = [key.strip() for key in os.environ.get("READER_LEAGUES", "").split(",") if key.strip()]
+# The leagues the feed serves (FEED_LEAGUES), whichever of them Forebet is read for (17 Nov: serving only the read ones
+# dropped eSB and Volta from the feed for 5 minutes).
+_SERVE = [key.strip() for key in os.environ.get("FEED_LEAGUES", "esb8,volta6,h2hgg").split(",") if key.strip()]
+ALL_LEAGUES = {key: url for key, url in LEAGUES.items() if key in _SERVE}
 if _ONLY:
     LEAGUES = {key: url for key, url in LEAGUES.items() if key in _ONLY}
 MATCH_MINUTES = {"esb8": 8, "volta6": 6, "h2hgg": 8, "gt12": 12}
