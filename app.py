@@ -315,6 +315,23 @@ def refresh_pages():
             cache["stale"] = True
 
 
+def memory_mb():
+    """This container's memory now (MB): the feed itself and everything it started (Chrome while it reads)."""
+    own = total = 0
+    for pid in os.listdir("/proc") if os.path.isdir("/proc") else []:
+        if not pid.isdigit():
+            continue
+        try:
+            with open(f"/proc/{pid}/status") as handle:
+                rss = next((int(line.split()[1]) for line in handle if line.startswith("VmRSS:")), 0)
+        except (OSError, ValueError, StopIteration):
+            continue
+        total += rss
+        if int(pid) == os.getpid():
+            own = rss
+    return {"feed_mb": round(own / 1024), "container_mb": round(total / 1024)}
+
+
 @app.get("/")
 def health():
     with cache_lock:
@@ -328,6 +345,7 @@ def health():
             "league_age_seconds": {key: round((datetime.now(timezone.utc) - datetime.fromisoformat(page["fetched_at"].replace("Z", "+00:00"))).total_seconds())
                                    for key, page in cache["leagues"].items() if page.get("fetched_at")},
             "telegram": dict(telegram_bot.STATUS),
+            "memory": memory_mb(),
         })
 
 

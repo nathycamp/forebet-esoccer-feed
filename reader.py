@@ -371,6 +371,9 @@ def tunnel_opens(proxy, host="www.forebet.com", port=443, timeout=6):
         return False
 
 
+PROXY_TEST_WORKERS = int(os.environ.get("PROXY_TEST_WORKERS", "32"))
+
+
 def free_proxies(limit=MAX_PROXY_ATTEMPTS, sample=800, deadline=20, exclude=()):
     """Return up to limit proxies from the proxifly US list, fastest tunnels first."""
     with urllib.request.urlopen(PROXY_LIST_URL, timeout=10) as response:
@@ -378,7 +381,7 @@ def free_proxies(limit=MAX_PROXY_ATTEMPTS, sample=800, deadline=20, exclude=()):
                   if line.startswith(("http://", "socks5://")) and line.strip() not in exclude]
     random.shuffle(listed)
     found = []
-    pool = ThreadPoolExecutor(max_workers=128)
+    pool = ThreadPoolExecutor(max_workers=PROXY_TEST_WORKERS)   # 17 Nov: was 128 threads (memory); a few proxies are enough
     futures = {pool.submit(tunnel_opens, proxy): proxy for proxy in listed[:sample]}
     try:
         for future in as_completed(futures, timeout=deadline):

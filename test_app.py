@@ -175,10 +175,12 @@ class ReaderServiceTests(unittest.TestCase):
         self.assertEqual(calls, ["read", "alert"])
 
     def test_health_and_structured_fixtures(self):
-        with app.app.test_client() as client, patch.object(app, "load_free_proxy_pool", return_value=["http://1.2.3.4:80"] * 5):
+        with app.app.test_client() as client, patch.object(app, "load_free_proxy_pool", return_value=["http://1.2.3.4:80"] * 5), \
+                patch.object(app, "memory_mb", return_value={"feed_mb": 1, "container_mb": 2}):
             self.assertEqual(client.get("/").get_json(), {
                 "status": "ok", "last_fetch": None, "last_status": "error", "free_proxies_ready": 5,
-                "esoccerbet": esoccerbet.STATUS, "official": {}, "league_age_seconds": {}, "telegram": telegram_bot.STATUS
+                "esoccerbet": esoccerbet.STATUS, "official": {}, "league_age_seconds": {}, "telegram": telegram_bot.STATUS,
+                "memory": {"feed_mb": 1, "container_mb": 2}
             })
         with patch.object(app, "run_reader", return_value={
             key: {"fixtures": [{"home_tag": "Mani", "kickoff_utc": "2026-10-18T16:55:00+00:00"}], "status": "ok"}
